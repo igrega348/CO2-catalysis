@@ -1,0 +1,12 @@
+[project]
+name = "co2_catalysis"
+description = "Modelling of electrochemical reduction of CO2"
+version = "0.1.0"
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+] 
