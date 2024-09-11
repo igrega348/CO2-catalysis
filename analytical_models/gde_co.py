@@ -312,7 +312,7 @@ def solve(S: System, phi_ext: np.ndarray):
     co3 = c21
     pH = np.log10(c12/1000/S.initial_carbonate_equilibria['Kw'])
     fe = co_current_density*10/(co_current_density*10+(F*L*r_H2))
-    current = co_current_density*10 + (F*L*r_H2)
+    current = co_current_density + (F*L*r_H2)/10 # mA/cm^2
     parasitic = c03*c12*S.input_parameters.eps*L*S.chemical_reaction_rates['k1f']
     electrode = L*k0*c03
     gdl_flux = S.diffusion_coefficients['Gas diffusion layer mass transfer coefficient']*(
