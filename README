@@ -1,0 +1,17 @@
+Core files:
+
+```
+analytical_models
+|   gde_co.py # Contains the system setup and solver for the gas diffusion electrode from paper doi:10.1016/j.electacta.2021.138987
+```
+
+Other files / jupyter notebooks are there from model development and testing (e.g. `analytical_solution.ipynb`), as well as doing specific calculations (e.g. `ubc_modelling.ipynb`).
+
+There is `pyproject.toml` which can be used to install the core files as python package by running
+```
+pip install -e .
+``` 
+Then it can be imported from any location e.g.
+```
+from analytical_models.gde_co import InputParameters, System, solve, solve_current
+```
