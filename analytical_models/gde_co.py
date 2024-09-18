@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Literal
+from typing import Dict, Literal, Tuple
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -150,7 +150,7 @@ class System:
 
         self.initial_carbonate_equilibria = initial_carbonate_equilibria
 
-    def calculate_co2_equilibrium(self):
+    def calculate_co2_equilibrium(self, max_iter=50):
         ice = self.initial_carbonate_equilibria
         input_parameters = self.input_parameters
 
@@ -170,7 +170,7 @@ class System:
         # find root of f(x) = 0
         co2 = co2_init
         for i in range(3):
-            x_n = opt.newton(f_xn, x0=1e-5, fprime=df_xn, tol=1e-36, args=(a,b,c(co2),d(co2)))
+            x_n = opt.newton(f_xn, x0=1e-5, fprime=df_xn, tol=1e-36, args=(a,b,c(co2),d(co2)), maxiter=max_iter)
             co2 = xn_to_co2(x_n, co2)
 
         co2_equilibrium_sol = {
@@ -364,7 +364,7 @@ def solve(S: System, phi_ext: np.ndarray):
         'B_2_1': B_2_1,
         'potential_vs_rhe': potential_vs_rhe,
         'co_current_density': co_current_density,
-        'current': current,
+        'current_density': current,
         'co2': co2,
         'co3': co3,
         'pH': pH,
@@ -382,9 +382,13 @@ def solve(S: System, phi_ext: np.ndarray):
         'solubility': solubility
     }
 
-def solve_current(S: System, current: np.ndarray):
-    f = lambda phi: (solve(S, phi)['current'] - current)**2
-    res = opt.minimize_scalar(f, bounds=(-2,0))
+def solve_current(
+    S: System, 
+    target_current_density: np.ndarray,
+    voltage_bounds: Tuple = (-2, 0)
+):
+    f = lambda phi: (solve(S, phi)['current_density'] - target_current_density)**2
+    res = opt.minimize_scalar(f, bounds=voltage_bounds)
     if not res.success:
         print(res.message)
     phi = res.x
