@@ -413,6 +413,7 @@ class System:
                 print(res.message)
             phi = res.x
             residuals = res.fun
+            out = self.solve(phi)
 
         elif self.mod == torch:
             # make it differentiable
@@ -427,8 +428,8 @@ class System:
             for _ in range(6): # empirically 5 is enough
                 optimizer.step(closure)
                 residuals.append(f(phi).item())
-
-        out = self.solve(phi.detach().item())
+            out = self.solve(phi.detach().item())
+            
         if return_residuals:
             return out, residuals
         return out
