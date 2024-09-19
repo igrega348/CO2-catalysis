@@ -424,7 +424,7 @@ class System:
                 loss.backward()
                 return loss
             residuals = []
-            for _ in range(10):
+            for _ in range(6): # empirically 5 is enough
                 optimizer.step(closure)
                 residuals.append(f(phi).item())
 
