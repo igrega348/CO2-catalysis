@@ -72,6 +72,36 @@ class InputParameters:
     def volumetric_surface_area(self):
         return 3 * (1 - self.eps) / self.r # m^-1
     
+def detach_dict(d: dict) -> dict:
+    out = {}
+    for k,v in d.items():
+        if isinstance(v, torch.Tensor):
+            out[k] = v.item()
+        else:
+            out[k] = v
+    return out
+
+def copy_input_parameters(ipt: InputParameters, keep_grad: bool = True):
+    if keep_grad:
+        return InputParameters(
+            T=ipt.T,
+            p0=ipt.p0,
+            Q=ipt.Q,
+            flow_chan_length=ipt.flow_chan_length,
+            flow_chan_height=ipt.flow_chan_height,
+            flow_chan_width=ipt.flow_chan_width,
+            L=ipt.L,
+            eps=ipt.eps,
+            r=ipt.r,
+            c_khco3=ipt.c_khco3,
+            c_k=ipt.c_k,
+            dic=ipt.dic,
+            method=ipt.method
+        )
+    d = vars(ipt)
+    d = detach_dict(d)
+    return InputParameters(**d)
+    
 class System:
     diffusion_coefficients: Dict[str, float]
     salting_out_exponents: Dict[str, float]
@@ -404,32 +434,40 @@ class System:
         self,
         target_current_density: Union[float, torch.Tensor],
         voltage_bounds: Tuple = (-2, 0),
-        return_residuals: bool = False
+        return_residual: bool = False,
     ):
-        f = lambda phi: (self.solve(phi)['current_density'] - target_current_density)**2
-        if self.mod == np:
-            res = opt.minimize_scalar(f, bounds=voltage_bounds)
-            if not res.success:
-                print(res.message)
-            phi = res.x
-            residuals = res.fun
-            out = self.solve(phi)
-
-        elif self.mod == torch:
-            # make it differentiable
-            phi = torch.tensor(0.5*sum(voltage_bounds), requires_grad=True)
-            optimizer = torch.optim.LBFGS([phi], lr=1e-1)
-            def closure():
-                optimizer.zero_grad()
-                loss = f(phi)
-                loss.backward()
-                return loss
-            residuals = []
-            for _ in range(6): # empirically 5 is enough
-                optimizer.step(closure)
-                residuals.append(f(phi).item())
-            out = self.solve(phi.detach().item())
-            
-        if return_residuals:
+        V = target_current_density.item() if isinstance(target_current_density, torch.Tensor) else target_current_density
+        if self.mod is torch:
+            S = self.copy(keep_grad=False)
+        else:
+            S = self
+        f = lambda phi: (S.solve(phi)['current_density'] - V)**2
+        res = opt.minimize_scalar(f, bounds=voltage_bounds)
+        if not res.success:
+            print(res.message)
+        phi = res.x
+        residuals = res.fun
+        # found operating point. Now do forward pass with original model
+        out = self.solve(phi)
+        if return_residual:
             return out, residuals
         return out
+
+    def copy(self, keep_grad: bool = True):
+        if keep_grad:
+            return System(
+                input_parameters=self.input_parameters,
+                diffusion_coefficients=self.diffusion_coefficients,
+                salting_out_exponents=self.salting_out_exponents,
+                electrode_reaction_kinetics=self.electrode_reaction_kinetics,
+                chemical_reaction_rates=self.chemical_reaction_rates,
+                mod=self.mod
+            )
+        return System(
+            input_parameters=copy_input_parameters(self.input_parameters, keep_grad=False),
+            diffusion_coefficients=detach_dict(self.diffusion_coefficients),
+            salting_out_exponents=detach_dict(self.salting_out_exponents),
+            electrode_reaction_kinetics=detach_dict(self.electrode_reaction_kinetics),
+            chemical_reaction_rates=detach_dict(self.chemical_reaction_rates),
+            mod=np
+        )
