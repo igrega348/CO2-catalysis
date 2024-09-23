@@ -435,22 +435,32 @@ class System:
         target_current_density: Union[float, torch.Tensor],
         voltage_bounds: Tuple = (-2, 0),
         return_residual: bool = False,
+        grid_size: int = 500
     ):
         V = target_current_density.item() if isinstance(target_current_density, torch.Tensor) else target_current_density
         if self.mod is torch:
             S = self.copy(keep_grad=False)
         else:
             S = self
-        f = lambda phi: (S.solve(phi)['current_density'] - V)**2
-        res = opt.minimize_scalar(f, bounds=voltage_bounds)
-        if not res.success:
-            print(res.message)
-        phi = res.x
-        residuals = res.fun
-        # found operating point. Now do forward pass with original model
-        out = self.solve(phi)
+        phi = np.linspace(*sorted(voltage_bounds, reverse=True), grid_size) # monotonically decreasing
+        I = S.solve(phi)['current_density'] # monotonically increasing
+        assert I[0] < V < I[-1], 'Target current density is out of bounds'
+        idx = np.searchsorted(I, V) - 1
+        if self.mod==torch:
+            phi = torch.linspace(phi[idx], phi[idx+1], grid_size)
+        else:
+            phi = np.linspace(phi[idx], phi[idx+1], grid_size)
+        # now solve again and pick the closest one
+        res = self.solve(phi)
+        if self.mod==torch:
+            idx = torch.argmin(torch.abs(res['current_density'] - V))
+        else:
+            idx = np.argmin(np.abs(res['current_density'] - V))
+        out = {}
+        for k, v in res.items():
+            out[k] = v[idx]
         if return_residual:
-            return out, residuals
+            return out, res['current_density'][idx] - V
         return out
 
     def copy(self, keep_grad: bool = True):
