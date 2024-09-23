@@ -444,7 +444,8 @@ class System:
             S = self
         phi = np.linspace(*sorted(voltage_bounds, reverse=True), grid_size) # monotonically decreasing
         I = S.solve(phi)['current_density'] # monotonically increasing
-        assert I[0] < V < I[-1], 'Target current density is out of bounds'
+        if not I[0] < V < I[-1]:
+            raise ValueError(f'Target current density {V} is not within the bounds of the voltage sweep {voltage_bounds}')
         idx = np.searchsorted(I, V) - 1
         if self.mod==torch:
             phi = torch.linspace(phi[idx], phi[idx+1], grid_size)
