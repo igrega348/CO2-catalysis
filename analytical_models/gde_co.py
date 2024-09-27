@@ -30,8 +30,8 @@ salting_out_exponents = MappingProxyType({
 
 electrode_reaction_kinetics = MappingProxyType({
     'i_0_CO': 0.00471, # [A/m^2]
-    'i_0_H2a': 0.00979, # [A/m^2]
-    'i_0_H2b': 1.16e-05, # [A/m^2] not used in the calculation
+    'i_0_H2a': 0.00979, # [A/m^2] not used in the calculation
+    'i_0_H2b': 1.16e-05, # [A/m^2] 
     'alpha_CO': 0.44,
     'alpha_H2a': 0.27,
     'alpha_H2b': 0.36,
@@ -444,9 +444,10 @@ class System:
             S = self
         phi = np.linspace(*sorted(voltage_bounds, reverse=True), grid_size) # monotonically decreasing
         I = S.solve(phi)['current_density'] # monotonically increasing
-        if not I[0] < V < I[-1]:
+        if not np.nanmin(I) < V < np.nanmax(I):
             raise ValueError(f'Target current density {V} is not within the bounds of the voltage sweep {voltage_bounds}')
         idx = np.searchsorted(I, V) - 1
+        assert not np.isnan(I[idx:idx+2]).any()
         if self.mod==torch:
             phi = torch.linspace(phi[idx], phi[idx+1], grid_size)
         else:
