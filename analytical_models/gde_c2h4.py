@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Dict, Literal, Tuple, Union
+from typing import Dict, Literal, Tuple, Union, Optional
 from types import MappingProxyType # immutable dictionary
+from functools import cached_property
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -114,6 +115,9 @@ class System:
     T: float # temperature [K]
     R: float = 8.3145 # Universal gas constant [J/(mol*K)]
     F: float = 96485 # Faraday constant [C/mol]
+
+    TOL: float = 1e-36
+    MAX_ITER: int = 50
     
     @property
     def T(self) -> float:
@@ -141,6 +145,8 @@ class System:
         self.chemical_reaction_rates = chemical_reaction_rates | {}
         self.input_parameters = input_parameters
 
+        self.co2_equilibrium = None
+
         self.update_diffusion_coefficients()
         self.set_butler_volmer_coefficients()
         self.set_flow_channel_characteristics()
@@ -163,10 +169,11 @@ class System:
         flow_channel_characteristics = {
             'mu': 0.00000093944, # [m^2/s]
         }
-        flow_channel_characteristics['Reynolds Number'] = input_parameters.v*input_parameters.flow_chan_length/flow_channel_characteristics['mu']
+        v = input_parameters.v
+        flow_channel_characteristics['Reynolds Number'] = v*input_parameters.flow_chan_length/flow_channel_characteristics['mu']
         flow_channel_characteristics['Hydrodynamic Entrance length'] = 0.0099*flow_channel_characteristics['Reynolds Number']*input_parameters.flow_chan_width
         flow_channel_characteristics['Parallel plate effective boundary layer'] = 13/35*input_parameters.flow_chan_width
-        diff_coeff_to_bl_thickness = lambda x: 3*1.607/4*(input_parameters.flow_chan_width*x*input_parameters.flow_chan_length/input_parameters.v)**(1/3)
+        diff_coeff_to_bl_thickness = lambda x: 3*1.607/4*(input_parameters.flow_chan_width*x*input_parameters.flow_chan_length/v)**(1/3)
         diff_coeff_to_K_L = lambda D,L: D*self.mod.sqrt(L**-2+flow_channel_characteristics['Parallel plate effective boundary layer']**-2)/np.sqrt(2)
         for substance in ['CO2', 'OH', 'CO3', 'HCO3', 'H', 'K', 'CO', 'H2']:
             flow_channel_characteristics[f'Developing boundary layer thickness {substance} (average)'] = diff_coeff_to_bl_thickness(self.diffusion_coefficients[substance])
@@ -201,7 +208,7 @@ class System:
 
         self.initial_carbonate_equilibria = initial_carbonate_equilibria
 
-    def calculate_co2_equilibrium(self, max_iter=50):
+    def calculate_co2_equilibrium(self):
         ice = self.initial_carbonate_equilibria
         input_parameters = self.input_parameters
 
@@ -221,7 +228,7 @@ class System:
         # find root of f(x) = 0
         co2 = co2_init
         for i in range(3):
-            x_n = opt.newton(f_xn, x0=1e-5, fprime=df_xn, tol=1e-36, args=(a,b,c(co2),d(co2)), maxiter=max_iter)
+            x_n = opt.newton(f_xn, x0=1e-5, fprime=df_xn, tol=self.TOL, args=(a,b,c(co2),d(co2)), maxiter=self.MAX_ITER) # rewrite to analytical solution
             co2 = xn_to_co2(x_n, co2)
 
         co2_equilibrium_sol = {
@@ -268,16 +275,17 @@ class System:
         Hnr = self.Hnr
         Hnr_c = lambda c1, c2: Hnr*self.mod.exp(-self.salting_out_exponents['h_OH']*c1 - self.salting_out_exponents['h_CO3']*c2 - self.salting_out_exponents['h_K']*(c1+2*c2))
         E_CO = self.electrode_reaction_kinetics['E_0_CO']
-        if self.input_parameters.method=='DIC':
-            dic_electrolyte_solution = self.calculate_dic_solution()
-            OH_neg = dic_electrolyte_solution['OH']
-            HCO3_neg = dic_electrolyte_solution['HCO3']
-            CO3_2neg = dic_electrolyte_solution['CO3']
-        elif self.input_parameters.method=='CO2 eql':
-            co2_equilibrium_sol = self.calculate_co2_equilibrium()
-            OH_neg = co2_equilibrium_sol['OH']
-            HCO3_neg = co2_equilibrium_sol['HCO3']
-            CO3_2neg = co2_equilibrium_sol['CO3']
+        if self.co2_equilibrium is None:
+            if self.input_parameters.method=='DIC':
+                co2_equilibrium = self.calculate_dic_solution()
+            elif self.input_parameters.method=='CO2 eql':
+                co2_equilibrium = self.calculate_co2_equilibrium()
+        else:
+            co2_equilibrium = self.co2_equilibrium
+            
+        OH_neg = co2_equilibrium['OH']
+        HCO3_neg = co2_equilibrium['HCO3']
+        CO3_2neg = co2_equilibrium['CO3']
 
         overpotential_CO = phi_ext - E_CO
         overpotential_C2H4 = phi_ext - self.electrode_reaction_kinetics['E_0_C2H4']
@@ -465,7 +473,7 @@ class System:
 
     def copy(self, keep_grad: bool = True):
         if keep_grad:
-            return System(
+            S = System(
                 input_parameters=self.input_parameters,
                 diffusion_coefficients=self.diffusion_coefficients,
                 salting_out_exponents=self.salting_out_exponents,
@@ -473,7 +481,9 @@ class System:
                 chemical_reaction_rates=self.chemical_reaction_rates,
                 mod=self.mod
             )
-        return System(
+            S.co2_equilibrium = self.co2_equilibrium
+            return S
+        S = System(
             input_parameters=copy_input_parameters(self.input_parameters, keep_grad=False),
             diffusion_coefficients=detach_dict(self.diffusion_coefficients),
             salting_out_exponents=detach_dict(self.salting_out_exponents),
@@ -481,3 +491,6 @@ class System:
             chemical_reaction_rates=detach_dict(self.chemical_reaction_rates),
             mod=np
         )
+        if self.co2_equilibrium is not None:
+            S.co2_equilibrium = detach_dict(self.co2_equilibrium)
+        return S
