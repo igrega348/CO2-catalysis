@@ -80,7 +80,10 @@ def detach_dict(d: dict) -> dict:
     out = {}
     for k,v in d.items():
         if isinstance(v, torch.Tensor):
-            out[k] = v.item()
+            if v.numel()==1:
+                out[k] = v.item()
+            else:
+                out[k] = v.detach().numpy()
         else:
             out[k] = v
     return out
@@ -449,24 +452,36 @@ class System:
         else:
             S = self
         phi = np.linspace(*sorted(voltage_bounds, reverse=True), grid_size) # monotonically decreasing
+        dphi = phi[1] - phi[0]
         I = S.solve(phi)['current_density'] # monotonically increasing
-        if not np.nanmin(I) < V < np.nanmax(I):
-            raise ValueError(f'Target current density {V} is not within the bounds of the voltage sweep {voltage_bounds}')
-        idx = np.searchsorted(I, V) - 1
-        assert not np.isnan(I[idx:idx+2]).any()
-        if self.mod==torch:
-            phi = torch.linspace(phi[idx], phi[idx+1], grid_size)
+        if not np.all(np.nanmin(I, axis=-1) < V) and np.all(V < np.nanmax(I, axis=-1)):
+            raise CurrentSearchError(f'Target current density {V} is not within the bounds of the voltage sweep {voltage_bounds}')
+        if I.ndim==1:
+            idx = np.searchsorted(I, V) - 1
         else:
-            phi = np.linspace(phi[idx], phi[idx+1], grid_size)
+            idx = np.apply_along_axis(np.searchsorted, axis=1, arr=I, v=V) - 1
+        # assert not np.isnan(I[idx:idx+2]).any()
+        phi_left = phi[idx]
+        if np.ndim(phi_left)>0:
+            phi_left = phi_left.reshape(-1, 1)
+        phi = phi_left + dphi*np.linspace(0, 1, grid_size) # 1d or 2d
+        if self.mod==torch:
+            phi = torch.tensor(phi, dtype=torch.float32)
+        
         # now solve again and pick the closest one
         res = self.solve(phi)
         if self.mod==torch:
-            idx = torch.argmin(torch.abs(res['current_density'] - V))
+            idx = torch.argmin(torch.abs(res['current_density'] - V), dim=-1)
         else:
-            idx = np.argmin(np.abs(res['current_density'] - V))
+            idx = np.argmin(np.abs(res['current_density'] - V), axis=-1)
         out = {}
+        if phi.ndim==2:
+            idx = idx[:, None]
         for k, v in res.items():
-            out[k] = v[idx]
+            if self.mod==torch:
+                out[k] = torch.take_along_dim(v, idx, dim=-1)
+            else:
+                out[k] = np.take_along_axis(v, idx, axis=-1)
         if return_residual:
             return out, res['current_density'][idx] - V
         return out
@@ -494,3 +509,6 @@ class System:
         if self.co2_equilibrium is not None:
             S.co2_equilibrium = detach_dict(self.co2_equilibrium)
         return S
+
+class CurrentSearchError(Exception):
+    pass
