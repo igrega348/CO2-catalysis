@@ -83,7 +83,7 @@ def detach_dict(d: dict) -> dict:
             if v.numel()==1:
                 out[k] = v.item()
             else:
-                out[k] = v.detach().numpy()
+                out[k] = v.detach().cpu().numpy()
         else:
             out[k] = v
     return out
