@@ -146,7 +146,7 @@ class System(torch.nn.Module):
         if co2_equilibrium is not None:
             self.co2_equilibrium = co2_equilibrium
         else:
-            self.co2_equilibrium = self._co2_equilibrium
+            self.co2_equilibrium = self._co2_equilibrium()
 
 
     @property
@@ -216,7 +216,7 @@ class System(torch.nn.Module):
 
         self.initial_carbonate_equilibria = initial_carbonate_equilibria
 
-    @cached_property
+    # @cached_property
     def _co2_equilibrium(self):
         ice = self.initial_carbonate_equilibria
 
