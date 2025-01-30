@@ -280,7 +280,7 @@ class System(torch.nn.Module):
         eps: torch.Tensor,
         r: torch.Tensor,
         L: torch.Tensor,
-        thetas: torch.Tensor,
+        thetas: Dict[torch.Tensor],
         gdl_mass_transfer_coeff: torch.Tensor,
     ):
         A = self.volumetric_surface_area(eps, r)
