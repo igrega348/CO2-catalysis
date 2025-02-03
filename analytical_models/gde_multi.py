@@ -229,7 +229,7 @@ class System(torch.nn.Module):
         df_xn = lambda x, a,b,c,d: 3*a*x**2 + 2*b*x + c 
         xn_to_co2 = lambda xn, co2: self.Hnr*self.dic*torch.exp(
             -self.c_k*self.salting_out_exponents['h_K'] -
-            self.salting_out_exponents.h_HCO3*co2*ice['K1']/xn -
+            self.salting_out_exponents['h_HCO3']*co2*ice['K1']/xn -
             co2*self.salting_out_exponents['h_CO3']*ice['K1']*ice['K2']/xn**2 -
             self.salting_out_exponents['h_OH']*ice['Kw']/xn*1000
         )
@@ -289,8 +289,8 @@ class System(torch.nn.Module):
         T = self.T
         Hnr = self.Hnr
         Hnr_c = lambda c1, c2: Hnr*torch.exp(-self.salting_out_exponents['h_OH']*c1 - self.salting_out_exponents['h_CO3']*c2 - self.salting_out_exponents['h_K']*(c1+2*c2))
-        DCO2 = self.bruggeman(self.diffusion_coefficients.CO2, eps)
-        E_CO = self.electrode_reaction_potentials.E_0_CO
+        DCO2 = self.bruggeman(self.diffusion_coefficients['CO2'], eps)
+        E_CO = self.electrode_reaction_potentials['E_0_CO']
         co2_equilibrium = self.co2_equilibrium
             
         OH_neg = co2_equilibrium['OH']
@@ -298,7 +298,7 @@ class System(torch.nn.Module):
         CO3_2neg = co2_equilibrium['CO3']
 
         overpotential_CO = phi_ext - E_CO
-        overpotential_C2H4 = phi_ext - self.electrode_reaction_potentials.E_0_C2H4
+        overpotential_C2H4 = phi_ext - self.electrode_reaction_potentials['E_0_C2H4']
         M = lambda k: torch.sqrt(k*L**2/DCO2)
 
         # solve without equilibrium reactions
@@ -311,7 +311,7 @@ class System(torch.nn.Module):
         c00 = Hnr*self.p0*eff_0
 
         # estimating OH- concentration
-        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics.alpha_H2b) # phi_ext is with respect to SHE
+        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b']) # phi_ext is with respect to SHE
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c00
         c10 = OH_neg+(
             self.flow_channel_characteristics['K_L_OH']*OH_neg - 
@@ -466,6 +466,7 @@ class System(torch.nn.Module):
 
         I = solution['current_density'].detach()
 
+        i_target = i_target.reshape(-1,1)
         idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
 
         curr_left = I.gather(dim=1, index=idx)
