@@ -28,8 +28,10 @@ def load_results_from_folder(folder: Path, plot: bool=False) -> Tuple[pd.DataFra
     df_res_val = df_res[val_cols]
     return df_res_train, df_res_val
 
-def load_data():
-    df = pd.read_excel('./Characterization_data.xlsx', skiprows=[1], index_col=0)
+def load_data(file: Optional[Path] = None):
+    if file is None:
+        file = Path('./Characterization_data.xlsx')
+    df = pd.read_excel(file, skiprows=[1], index_col=0)
     df = df[['AgCu Ratio', 'Naf vol (ul)', 'Sust vol (ul)', 'Catalyst mass loading', 'FE (Eth)', 'FE (CO)']]
     df = df.sort_values(by=['AgCu Ratio', 'Naf vol (ul)'])
     df = df.dropna()
