@@ -1,4 +1,6 @@
+# CO2-catalysis
 Repository to accompany paper A physics-based data-driven model for CO2 gas diffusion electrodes to drive automated laboratories (https://arxiv.org/abs/2502.06323v1)
+
 Core files:
 
 ```
