@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "co2_catalysis"
-description = "Modelling of electrochemical reduction of CO2"
+name = "carbondriver"
+description = "Physics based active learning tools for CO2 reduction experiments"
+dependencies = ["torch", "pandas", "seaborn"]
 version = "0.1.0"
 authors = [
   { name="Ivan Grega", email="grega.ivan@gmail.com" },
 ]
-
-[tool.setuptools.packages.find]
-include = ["analytical_models*"]
+readme = "README.md"
+license = "GNU GPLv3"
