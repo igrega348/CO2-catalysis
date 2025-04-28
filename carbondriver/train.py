@@ -12,11 +12,6 @@ import matplotlib.pyplot as plt
 from math import ceil
 from rich.progress import track
 
-from analytical_models.gde_multi import System
-from analytical_models import gde_multi
-from analytical_models.loaders import load_data, normalize_df_torch
-
-
 def get_cov(batch):
     batch = batch.reshape(*batch.shape[:-2], -1)
     return torch.cov(batch.transpose(-1,-2)) + 1e-6*torch.eye(batch.shape[1])

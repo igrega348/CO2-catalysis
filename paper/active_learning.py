@@ -1,4 +1,5 @@
 from carbondriver import GDEOptimizer
+from carbondriver.loaders import load_data
 
 X, y, means, stds, df = load_data()
 df['triplet'] = df.index//3
@@ -34,7 +35,7 @@ col_i = 0
 
 # ## MLP ensemble
 
-gde = GDEOptimizer(model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config)
+gde = GDEOptimizer(model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out")
 
 for d in range(NUM_RUNS):
     DNAME = Path(f'./MLP_F/MLP_F{d}')

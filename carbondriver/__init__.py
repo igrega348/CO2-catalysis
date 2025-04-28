@@ -1,5 +1,5 @@
 from .models import PhModel, MLPModel, MultitaskGPModel, MultitaskGPhysModel
-from .trainers import train_model_ens, train_GP_model, train_GP_Ph_model
+from .train import train_model_ens, train_GP_model, train_GP_Ph_model
 from .loaders import load_data, normalize_df_torch
 from .config import default_config
 import pandas as pd
@@ -31,7 +31,7 @@ class GDEOptimizer():
         else:
             raise ValueError
             
-        if self.aquisition == "EI":
+        if aquisition == "EI":
             self.aquisition = get_ei
         else:
             raise ValueError("Only EI is supported for now.")
@@ -43,7 +43,7 @@ class GDEOptimizer():
         self.maximize = maximize
 
         self.quantity = quantity
-        
+
         self.i = 0
 
         self.df = pd.DataFrame()
@@ -68,7 +68,7 @@ class GDEOptimizer():
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 
-        _, predict = train_model_ens(X, y, self.model, DNAME=self.outpur_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+        _, predict = train_model_ens(X, y, self.model, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
         return predict
     
@@ -93,7 +93,7 @@ class GDEOptimizer():
 
         mu, std = predictor(X)
 
-        col_i = self.df.columns.get_loc(self.quantity)
+        col_i = self.df.columns.get_loc(self.quantity) - 4 # TODO: We should get rid of numerical column calls
         
         ei = get_ei(mu[:,col_i], std[:,col_i], torch.tensor(self.df[self.quantity].max()), minimize=False)
         

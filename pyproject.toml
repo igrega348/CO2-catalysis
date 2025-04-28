@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "carbondriver"
 description = "Physics based active learning tools for CO2 reduction experiments"
-dependencies = ["torch", "pandas", "seaborn"]
+dependencies = ["torch", "gpytorch", "pandas", "seaborn", "rich", "openpyxl"]
 version = "0.1.0"
 authors = [
   { name="Ivan Grega", email="grega.ivan@gmail.com" },
 ]
 readme = "README.md"
-license = "GNU GPLv3"
+license-files = ["LICENSE.txt"]
