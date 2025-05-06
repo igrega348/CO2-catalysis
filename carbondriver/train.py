@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from math import ceil
 from rich.progress import track
 
+from carbondriver.models import *
+
 def get_cov(batch):
     batch = batch.reshape(*batch.shape[:-2], -1)
     return torch.cov(batch.transpose(-1,-2)) + 1e-6*torch.eye(batch.shape[1])
@@ -117,9 +119,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
     return stats, predict
 
 
-# In[ ]:
-
-
 def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, plot=False):
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True, parents=True)
@@ -195,10 +194,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
         return mean_test, std_test
 
     return stats, predict
-
-
-# In[13]:
-
 
 def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()
