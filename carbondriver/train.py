@@ -107,14 +107,14 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         plt.show()
     # save average losses to file
     stats.to_csv(DNAME/f'stats_{i:02d}.csv')
-    
-    def predict(X_test):
-        fe_test = vmap(fmodel, in_dims=(0, 0, None), randomness='different')(params, buffers, X_test)
-        mean_test = fe_test.mean(dim=0)
-        std_test = fe_test.std(dim=0)*variance_scaler.sqrt()
-        return mean_test, std_test
 
-    return stats, predict
+
+    def scaled_model(x):
+        y = vmap(fmodel, in_dims=(0, 0, None), randomness='different')(params, buffers, x)
+        y_diff = y - y.mean(dim=0, keepdim=True)
+        return y.mean(dim=0) + y_diff * variance_scaler.sqrt()
+
+    return stats, scaled_model
 
 
 # In[ ]:

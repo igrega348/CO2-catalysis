@@ -5,21 +5,31 @@ from .config import default_config
 import pandas as pd
 import torch
 
-def get_ei(mu, sigma, fstar, minimize=False):
-    if minimize: 
-        mu = -mu
-        fstar = -fstar
-    diff = mu - fstar
-    u = diff / sigma
-    unit_normal = torch.distributions.Normal(0, 1)
-    ei = ( diff * unit_normal.cdf(u) + 
-          sigma * unit_normal.log_prob(u).exp()
-    )
-    ei[sigma <= 0.] = 0.
-    return ei
+from botorch.acquisition.analytic import ExpectedImprovement
+from botorch.optim import optimize_acqf
+from botorch.acquisition.objective import ScalarizedPosteriorTransform
+
+from botorch.models.ensemble import EnsembleModel
 
 class GDEOptimizer():
-    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config):
+    """
+    Class to optimize gas diffusion electrodes experimental parameters based with Bayesian optimization using various models.
+    """
+    
+    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None):
+        """
+        Initialize the optimizer with the specified model and acquisition function.
+
+        :param model_name: Name of the model to use (e.g., 'GP', 'Ph', 'MLP', 'GP+Ph')
+        :param aquisition: Acquisition function to use (e.g., 'EI' for Expected Improvement)
+        :param quantity: The quantity to optimize (e.g., 'FE (Eth)')
+        :param maximize: Whether to maximize or minimize the quantity
+        :param output_dir: Directory to save output files
+        :param config: Configuration dictionary with parameters for training and normalization
+        :param bounds: Bounds for the optimization, should be a tensor of shape (2, num_features)
+        
+        """
+        
         if model_name == 'GP':
             self.model = MultitaskGPModel
         elif model_name == 'Ph':
@@ -32,7 +42,7 @@ class GDEOptimizer():
             raise ValueError
             
         if aquisition == "EI":
-            self.aquisition = get_ei
+            self.aquisition = aquisition
         else:
             raise ValueError("Only EI is supported for now.")
 
@@ -47,7 +57,20 @@ class GDEOptimizer():
         self.i = 0
 
         self.df = pd.DataFrame()
-        
+
+        self._bounds = bounds
+
+    @property
+    def bounds(self):
+        """
+        Get the bounds for the optimization based on the data if not specified in the declaration.
+        """
+        if self._bounds is None:
+            bds_max = self.df.iloc[:, :-2].values.max(axis=0)
+            bds_min = self.df.iloc[:, :-2].values.min(axis=0)
+            return torch.tensor([bds_min, bds_max], dtype=torch.float32)
+        else:
+            return self._bounds
         
     def load(path):
         '''
@@ -59,7 +82,8 @@ class GDEOptimizer():
         '''
         Train and return next experiment.
         '''
-        self.df = pd.concat([self.df, new_data])
+        
+        self.df = pd.concat([self.df, new_data], axis=0) #TODO: does not work with series
 
         if self.config['normalize']:
             X, y, means, stds, _ = normalize_df_torch(self.df)
@@ -68,17 +92,64 @@ class GDEOptimizer():
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 
-        _, predict = train_model_ens(X, y, self.model, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+        _, model = train_model_ens(X, y, self.model, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
-        return predict
+        class Predictor(EnsembleModel):
+            def __init__(self):
+                super().__init__()
+                self._num_outputs = 1
+        
+            def forward(self, X=torch.zeros((1, X.shape[1]), dtype=torch.float32)):
+                return model(X.permute((1,0,2))).permute((0,2,1,3))
+                
+        return Predictor()
+
+    def _get_acquisition_function(self, predictor):
+        """
+        Get the acquisition function based on the specified acquisition type.
+        """
+        if self.aquisition == "EI":
+            return ExpectedImprovement(
+                predictor,
+                best_f=torch.tensor(self.df[self.quantity].max()),
+                maximize=self.maximize
+            )
+        else:
+            raise ValueError("Unsupported acquisition function.")
     
-    def step(self, new_data):
+    def step(self, new_data, bounds=None):
 
+        """
+        Perform a step in the optimization process using the new data and bounds.
+        
+        :param new_data: New data to be added to the existing data for training the model
+        :param bounds: Optional bounds for the optimization
+
+        :return: The acquisition function value and the next experiment parameters
+        """
+
+        if self.config['normalize']:
+            raise NotImplementedError("Normalization is not implemented for this step method.")
+        
         predictor = self.get_predictor(new_data)
+
+        AF = self._get_acquisition_function(predictor)
+
+        if bounds is None:
+            bounds = self.bounds
+        
+        next_experiment, _ = optimize_acqf(
+            acq_function=AF,
+            bounds=bounds,
+            q=1,
+            num_restarts=20,
+            raw_samples=30,
+            options={},
+        )
 
         self.i += 1
 
-        raise NotImplementedError
+        return AF(next_experiment), next_experiment.detach().cpu().numpy().flatten()
 
     def step_within_data(self, new_data, possible_data):
 
@@ -91,13 +162,13 @@ class GDEOptimizer():
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 
-        mu, std = predictor(X)
+        AF = self._get_acquisition_function(predictor)
 
-        col_i = self.df.columns.get_loc(self.quantity) - 4 # TODO: We should get rid of numerical column calls
-        
-        ei = get_ei(mu[:,col_i], std[:,col_i], torch.tensor(self.df[self.quantity].max()), minimize=False)
+        scores = AF(X.unsqueeze(1))
         
         self.i += 1
+
+        col_i = self.df.columns.get_loc(self.quantity) - 4  # TODO: We should get rid of numerical column calls
         
-        return ei.max(), ei.argmax()
+        return scores[col_i].max(), scores[col_i].argmax()
         
