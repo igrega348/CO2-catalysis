@@ -80,10 +80,13 @@ class GDEOptimizer():
 
     def get_predictor(self, new_data):
         '''
-        Train and return next experiment.
+        Train and return the new predictor based on the new data.
         '''
+
+        if isinstance(new_data, pd.Series):
+            new_data = new_data.to_frame().T
         
-        self.df = pd.concat([self.df, new_data], axis=0) #TODO: does not work with series
+        self.df = pd.concat([self.df, new_data], axis=0)
 
         if self.config['normalize']:
             X, y, means, stds, _ = normalize_df_torch(self.df)
@@ -100,7 +103,7 @@ class GDEOptimizer():
                 self._num_outputs = 1
         
             def forward(self, X=torch.zeros((1, X.shape[1]), dtype=torch.float32)):
-                return model(X.permute((1,0,2))).permute((0,2,1,3))
+                return model(X.permute((1,0,2))).permute((2,0,1,3))
                 
         return Predictor()
 
@@ -137,14 +140,18 @@ class GDEOptimizer():
 
         if bounds is None:
             bounds = self.bounds
+
+        col_i = self.df.columns.get_loc(self.quantity) - 4  # TODO: We should get rid of numerical column calls
+
+        AF_q = lambda x:AF(x)[:,col_i]
         
         next_experiment, _ = optimize_acqf(
-            acq_function=AF,
+            acq_function=AF_q,
             bounds=bounds,
             q=1,
             num_restarts=20,
             raw_samples=30,
-            options={},
+            options={}, 
         )
 
         self.i += 1
@@ -163,12 +170,12 @@ class GDEOptimizer():
             y = torch.tensor(y, dtype=torch.float32)
 
         AF = self._get_acquisition_function(predictor)
-
+        
         scores = AF(X.unsqueeze(1))
         
         self.i += 1
 
         col_i = self.df.columns.get_loc(self.quantity) - 4  # TODO: We should get rid of numerical column calls
         
-        return scores[col_i].max(), scores[col_i].argmax()
+        return scores[:, col_i].max(), scores[:, col_i].argmax()
         

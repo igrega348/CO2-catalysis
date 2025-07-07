@@ -21,7 +21,7 @@ def test_gde_optimizer_within():
     print("First pick:", ei, int(next_pick))
     
     df_new =  df_explore.iloc[int(next_pick)]
-    df_explore =  df_explore.drop(index=df_explore.iloc[int(next_pick)].name)
+    df_explore =  df_explore.drop(index=df_new.name)
 
     ei, next_pick = gde.step_within_data(df_new, df_explore)
 
