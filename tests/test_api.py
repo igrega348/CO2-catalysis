@@ -1,3 +1,11 @@
+from pathlib import Path
+# Path to this test file
+here = Path(__file__).parent
+
+# Path to paper/Characterization_data.xlsx from repo root
+data_path = here.parent / "paper" / "Characterization_data.xlsx"
+
+
 def test_import():
     from carbondriver import GDEOptimizer
 
@@ -11,7 +19,7 @@ def test_gde_optimizer_within():
     
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data("paper/Characterization_data.xlsx")
+    _, _, _, _, df = load_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -33,7 +41,7 @@ def test_gde_optimizer_free():
     
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data("paper/Characterization_data.xlsx")
+    _, _, _, _, df = load_data(data_path)
 
     ei, next_pick = gde.step(df)
 
