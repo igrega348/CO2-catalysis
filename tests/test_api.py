@@ -17,7 +17,7 @@ def test_gde_optimizer_within():
 
     import pandas as pd
     
-    gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
+    gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
     _, _, _, _, df = load_data(data_path)
 
@@ -39,7 +39,7 @@ def test_gde_optimizer_free():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
     
-    gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
+    gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
     _, _, _, _, df = load_data(data_path)
 

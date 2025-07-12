@@ -82,20 +82,40 @@ class GDEOptimizer():
         '''
         Train and return the new predictor based on the new data.
         '''
-
         if isinstance(new_data, pd.Series):
             new_data = new_data.to_frame().T
         
         self.df = pd.concat([self.df, new_data], axis=0)
 
-        if self.config['normalize']:
+        # Normalize if needed or if using PhModel (which requires normalization)
+        if self.config['normalize'] or self.model == PhModel:
             X, y, means, stds, _ = normalize_df_torch(self.df)
         else:
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 
-        _, model = train_model_ens(X, y, self.model, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+        # Create appropriate model factory
+        if self.model == PhModel:
+            if not self.config['normalize']:
+                # PhModel requires normalization, so we need the stats even if normalize=False
+                _, _, means, stds, _ = normalize_df_torch(self.df)
+                
+            model_factory = lambda: PhModel(
+                zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']),
+                current_target=233
+            )
+        else:
+            model_factory = self.model
+
+        _, model = train_model_ens(
+            X, y, 
+            model_factory, 
+            DNAME=self.output_dir, 
+            i=self.i, 
+            num_iter=self.config["num_iter"], 
+            plot=self.config["make_plots"]
+        )
 
         class Predictor(EnsembleModel):
             def __init__(self):
