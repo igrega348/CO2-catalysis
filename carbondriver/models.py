@@ -1,7 +1,7 @@
 from typing import Tuple, Optional
 import torch
 import gpytorch
-
+from carbondriver import gde_multi
 class PhModel(torch.nn.Module):
     '''
     Model for predicting the Faradaic efficiency of CO and C2H4 on a catalyst.

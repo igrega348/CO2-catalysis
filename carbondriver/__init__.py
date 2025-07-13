@@ -4,7 +4,7 @@ from .loaders import load_data, normalize_df_torch
 from .config import default_config
 import pandas as pd
 import torch
-
+from carbondriver import gde_multi
 from botorch.acquisition.analytic import ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
