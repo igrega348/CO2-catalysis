@@ -35,13 +35,13 @@ def test_gde_optimizer_within():
 
     print("Second pick", ei, int(next_pick))
     
-def test_gde_optimizer_within_ML():
+def test_gde_optimizer_within_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
 
     import pandas as pd
     
-    gde = GDEOptimizer("ML", output_dir="./tmp_test_out")
+    gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
     _, _, _, _, df = load_data(data_path)
 
@@ -71,11 +71,11 @@ def test_gde_optimizer_free():
 
     print(ei, next_pick)
 
-def test_gde_optimizer_free():
+def test_gde_optimizer_free_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
     
-    gde = GDEOptimizer("ML", output_dir="./tmp_test_out")
+    gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
     _, _, _, _, df = load_data(data_path)
 
