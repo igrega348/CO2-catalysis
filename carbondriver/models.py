@@ -34,7 +34,7 @@ class PhModel(torch.nn.Module):
             torch.nn.Linear(ldim, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
-            torch.nn.Linear(ldim, 2),  # Output for CO and C2H4 Faradaic efficiencies
+            torch.nn.Linear(ldim, 5),  #Ph model is 5 latent parameters?
         )
 
         erc = gde_multi.electrode_reaction_kinetics | {}
@@ -62,16 +62,17 @@ class PhModel(torch.nn.Module):
         eps = torch.sigmoid(latents[..., [1]])
         zlt = (x[..., 3]*self.zlt_mu_stds[1] + self.zlt_mu_stds[0]).view(-1,1)
         L = zlt / (1 - eps)
+        #print("latents.shape:", latents.shape)
         K_dl_factor = torch.exp(latents[..., [2]])
-        thetas = self.softmax(2*latents[..., 3:])
-        # CO activation must not be zero
-        theta0 = thetas[...,[0]]
-        theta1 = thetas[...,[1]]
-        theta2 = thetas[...,[2]]
+        thetas_raw = self.softmax(2*latents[..., 3:])
+        theta0 = thetas_raw[..., [0]]                              # CO
+        theta1 = thetas_raw[..., [1]]                              # C2H4
+        theta2 = 1.0 - theta0 - theta1                             # H2b
+
         thetas = {
-            'CO': theta0,
+            'CO':   theta0,
             'C2H4': theta1,
-            'H2b': theta2
+            'H2b':  theta2
         }
         gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
 
@@ -85,7 +86,15 @@ class PhModel(torch.nn.Module):
             grid_size=1000,
             voltage_bounds=(-1.25,0)
         )
-        out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
+        #out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
+
+        out = torch.cat([
+            solution['fe_c2h4'][..., -1:],  # shape [batch, 1]
+            solution['fe_co'][..., -1:]     # shape [batch, 1]
+        ], dim=-1)  # shape [batch, 2]
+        #print("out.shape:", out.shape)
+        #print("fe_c2h4 shape:", solution['fe_c2h4'].shape)
+        #print("fe_co shape:", solution['fe_co'].shape)
         return out
 
 

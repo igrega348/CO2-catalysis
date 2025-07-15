@@ -23,8 +23,8 @@ def test_gde_optimizer_within():
 
     _, _, _, _, df = load_data(data_path)
 
-    df_train = df.loc[:30]
-    df_explore = df.loc[31:]
+    df_train = df.loc[:15]
+    df_explore = df.loc[16:]
 
     ei, next_pick = gde.step_within_data(df_train, df_explore)
 
