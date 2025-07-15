@@ -457,7 +457,7 @@ class System(torch.nn.Module):
         voltage_bounds: Tuple = (-2, 0),
         return_init_residual: bool = False,
         grid_size: int = 500
-    ):
+    ):           
         if not isinstance(i_target, torch.Tensor):
             i_target = torch.ones_like(eps)*i_target
 
@@ -466,12 +466,24 @@ class System(torch.nn.Module):
 
         I = solution['current_density'].detach()
 
-        i_target = i_target.reshape(-1,1)
-        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
+        desired_shape = I.shape[:-1] + (1,)
+        i_target = i_target.reshape(desired_shape)
+        #RuntimeError: torch.searchsorted(): boundaries tensor should be 1 dimension or the first N-1 dimensions of boundaries tensor and input value tensor must match,
+        # but we got boundaries tensor [50, 1, 74, 1000] and input value tensor [50, 74, 1]
+       #print("I shape:", I.shape)
+        #print("i_target shape:", i_target.shape)
 
-        curr_left = I.gather(dim=1, index=idx)
-        curr_right = I.gather(dim=1, index=idx+1)
-        p = (i_target - curr_left) / (curr_right - curr_left)
+        idx = torch.searchsorted(I, i_target, side='right') - 1  # shape matches I.shape[:-1]
+        #print("idx shape:", idx.shape)
+        idx = idx.clamp(min=0, max=I.shape[-1] - 2)  # avoid out-of-bounds
+
+        # Expand idx to match I's shape for gather
+        #idx_expanded = idx.unsqueeze(-1)  # shape (..., 1)
+        #print("idx_expanded shape:", idx_expanded.shape)
+
+        curr_left = torch.gather(I, dim=-1, index=idx).squeeze(-1) #Squeeze to remove the last dimension, it is redundant
+        curr_right = torch.gather(I, dim=-1, index=idx + 1).squeeze(-1)
+        p = (i_target.squeeze(-1) - curr_left) / (curr_right - curr_left)
 
         out = {}
         for k, v in solution.items():

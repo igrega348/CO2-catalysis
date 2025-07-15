@@ -69,6 +69,10 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         optimizer.zero_grad()
 
         output = vmap(fmodel, in_dims=(0, 0, 0), randomness='different')(params, buffers, X_train_b)
+        print("X_train_b.shape:", X_train_b.shape)
+        print("output.shape:", output.shape)
+        print("y_train_b.shape:", y_train_b.shape)
+        #breakpoint()  # Debugging line to inspect shapes
         loss = torch.mean((output - y_train_b)**2)
 
         loss.backward()

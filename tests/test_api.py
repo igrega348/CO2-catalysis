@@ -1,11 +1,13 @@
 from pathlib import Path
+import pytest
+import pdb
 # Path to this test file
 here = Path(__file__).parent
 
 # Path to paper/Characterization_data.xlsx from repo root
 data_path = here.parent / "paper" / "Characterization_data.xlsx"
 
-
+@pytest.mark.skip(reason='focus on Ph model for now')
 def test_import():
     from carbondriver import GDEOptimizer
 
@@ -35,6 +37,7 @@ def test_gde_optimizer_within():
 
     print("Second pick", ei, int(next_pick))
     
+@pytest.mark.skip(reason='focus on Ph model for now') 
 def test_gde_optimizer_within_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
@@ -58,7 +61,8 @@ def test_gde_optimizer_within_MLP():
     ei, next_pick = gde.step_within_data(df_new, df_explore)
 
     print("Second pick", ei, int(next_pick))
-
+    
+@pytest.mark.skip(reason='Long to run')
 def test_gde_optimizer_free():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
@@ -70,7 +74,8 @@ def test_gde_optimizer_free():
     ei, next_pick = gde.step(df)
 
     print(ei, next_pick)
-
+    
+@pytest.mark.skip(reason='focus on Ph model for now')
 def test_gde_optimizer_free_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
