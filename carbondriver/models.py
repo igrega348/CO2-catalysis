@@ -34,7 +34,7 @@ class PhModel(torch.nn.Module):
             torch.nn.Linear(ldim, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
-            torch.nn.Linear(ldim, 6)
+            torch.nn.Linear(ldim, 2),  # Output for CO and C2H4 Faradaic efficiencies
         )
 
         erc = gde_multi.electrode_reaction_kinetics | {}
