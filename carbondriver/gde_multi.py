@@ -227,41 +227,27 @@ class System(torch.nn.Module):
         d = lambda co2: -2*co2/1000*ice['K1']*ice['K2']
         f_xn = lambda x, a,b,c,d: a*x**3 + b*x**2 + c*x + d
         df_xn = lambda x, a,b,c,d: 3*a*x**2 + 2*b*x + c 
-        
-        # Use numpy/standard math for scipy optimization, convert tensors to float
-        def xn_to_co2(xn, co2):
-            # Convert torch tensors to float for numpy compatibility
-            h_K = float(self.salting_out_exponents['h_K'])
-            h_HCO3 = float(self.salting_out_exponents['h_HCO3'])
-            h_CO3 = float(self.salting_out_exponents['h_CO3'])
-            h_OH = float(self.salting_out_exponents['h_OH'])
-            
-            exponent = (
-                -self.c_k * h_K -
-                h_HCO3 * co2 * ice['K1'] / xn -
-                co2 * h_CO3 * ice['K1'] * ice['K2'] / xn**2 -
-                h_OH * ice['Kw'] / xn * 1000
-            )
-            return self.Hnr * self.dic * np.exp(exponent)
-        
+        xn_to_co2 = lambda xn, co2: self.Hnr*self.dic*torch.exp(
+            -self.c_k*self.salting_out_exponents['h_K'] -
+            self.salting_out_exponents['h_HCO3']*co2*ice['K1']/xn -
+            co2*self.salting_out_exponents['h_CO3']*ice['K1']*ice['K2']/xn**2 -
+            self.salting_out_exponents['h_OH']*ice['Kw']/xn*1000
+        )
         # find root of f(x) = 0
         co2 = co2_init
         for i in range(3):
             x_n = opt.newton(f_xn, x0=1e-5, fprime=df_xn, tol=self.TOL, args=(a,b,c(co2),d(co2)), maxiter=self.MAX_ITER) # rewrite to analytical solution
             co2 = xn_to_co2(x_n, co2)
 
-        # Convert to tensors for final result
-        x_n_tensor = torch.tensor(x_n, dtype=torch.float32)
-        co2_tensor = torch.tensor(co2, dtype=torch.float32)
-        
         co2_equilibrium_sol = {
-            'final_pH': -torch.log10(x_n_tensor),
-            'CO2': co2_tensor,
-            'HCO3': co2_tensor*ice['K1']/x_n_tensor,
-            'OH': ice['Kw']/x_n_tensor * 1000,
+            'final_pH': -torch.log10(x_n),
+            'CO2': co2,
+            'HCO3': co2*ice['K1']/x_n,
+            'OH': ice['Kw']/x_n * 1000,
             'K': self.c_k,
         }
-        co2_equilibrium_sol['CO3'] = co2_equilibrium_sol['HCO3']*ice['K2']/x_n_tensor
+        co2_equilibrium_sol['CO3'] = co2_equilibrium_sol['HCO3']*ice['K2']/x_n
+        co2_equilibrium_sol
         return co2_equilibrium_sol
 
     @cached_property
@@ -471,7 +457,7 @@ class System(torch.nn.Module):
         voltage_bounds: Tuple = (-2, 0),
         return_init_residual: bool = False,
         grid_size: int = 500
-    ):
+    ):           
         if not isinstance(i_target, torch.Tensor):
             i_target = torch.ones_like(eps)*i_target
 
@@ -480,52 +466,24 @@ class System(torch.nn.Module):
 
         I = solution['current_density'].detach()
 
-        # Ensure proper dimensions for searchsorted
-        # Handle both regular and batched tensors
-        try:
-            # Get the actual tensor shape, handling BatchedTensor if needed
-            if hasattr(eps, '_value'):  # BatchedTensor case
-                eps_shape = eps._value.shape
-            else:
-                eps_shape = eps.shape
-                
-            batch_size = eps_shape[0]
-            
-            # For i_target, we need to be careful about reshaping
-            if hasattr(i_target, '_value'):  # BatchedTensor case
-                i_target_tensor = i_target._value
-            else:
-                i_target_tensor = i_target
-                
-            # Reshape i_target to (batch_size, 1) safely
-            if i_target_tensor.numel() == batch_size:
-                i_target = i_target_tensor.reshape(batch_size, 1)
-            elif i_target_tensor.numel() > batch_size:
-                # Take only the needed elements
-                i_target = i_target_tensor.flatten()[:batch_size].reshape(batch_size, 1)
-            else:
-                # Expand if we have fewer elements
-                i_target = i_target_tensor.expand(batch_size, 1)
-        except Exception as e:
-            # Fallback: use original approach but with more error handling
-            try:
-                batch_size = eps.shape[0] if hasattr(eps, 'shape') else eps._value.shape[0]
-                i_target = i_target.reshape(-1)[:batch_size].reshape(batch_size, 1)
-            except:
-                # Last resort: assume batch_size of 1
-                batch_size = 1
-                i_target = i_target.flatten()[:1].reshape(1, 1)
-        
-        # I should be (batch_size, grid_size), i_target should be (batch_size, 1)
-        # torch.searchsorted expects sorted input along the last dimension
-        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
-        
-        # Clamp idx to valid range
-        idx = torch.clamp(idx, 0, I.shape[1] - 2)
+        desired_shape = I.shape[:-1] + (1,)
+        i_target = i_target.reshape(desired_shape)
+        #RuntimeError: torch.searchsorted(): boundaries tensor should be 1 dimension or the first N-1 dimensions of boundaries tensor and input value tensor must match,
+        # but we got boundaries tensor [50, 1, 74, 1000] and input value tensor [50, 74, 1]
+       #print("I shape:", I.shape)
+        #print("i_target shape:", i_target.shape)
 
-        curr_left = I.gather(dim=1, index=idx)
-        curr_right = I.gather(dim=1, index=idx+1)
-        p = (i_target - curr_left) / (curr_right - curr_left)
+        idx = torch.searchsorted(I, i_target, side='right') - 1  # shape matches I.shape[:-1]
+        #print("idx shape:", idx.shape)
+        idx = idx.clamp(min=0, max=I.shape[-1] - 2)  # avoid out-of-bounds
+
+        # Expand idx to match I's shape for gather
+        #idx_expanded = idx.unsqueeze(-1)  # shape (..., 1)
+        #print("idx_expanded shape:", idx_expanded.shape)
+
+        curr_left = torch.gather(I, dim=-1, index=idx).squeeze(-1) #Squeeze to remove the last dimension, it is redundant
+        curr_right = torch.gather(I, dim=-1, index=idx + 1).squeeze(-1)
+        p = (i_target.squeeze(-1) - curr_left) / (curr_right - curr_left)
 
         out = {}
         for k, v in solution.items():
