@@ -467,11 +467,16 @@ class System(torch.nn.Module):
         I = solution['current_density'].detach()
 
         i_target = i_target.reshape(-1,1)
-        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
 
+        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
+        idx = torch.clamp(idx,min=0, max=I.shape[1]-2) # clamp to avoid out of bounds
+        
         curr_left = I.gather(dim=1, index=idx)
         curr_right = I.gather(dim=1, index=idx+1)
-        p = (i_target - curr_left) / (curr_right - curr_left)
+        denom = curr_right - curr_left
+        epsilon = 1e-10  # Small value to avoid division by zero
+        denom_safe = torch.where(torch.abs(denom) < epsilon, torch.full_like(denom, fill_value=epsilon), other=denom)
+        p = (i_target - curr_left) / denom_safe
 
         out = {}
         for k, v in solution.items():
