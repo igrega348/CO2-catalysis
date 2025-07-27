@@ -1,6 +1,7 @@
 from typing import Tuple, Optional
 import torch
 import gpytorch
+from carbondriver import gde_multi
 
 class PhModel(torch.nn.Module):
     '''

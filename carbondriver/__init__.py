@@ -90,12 +90,21 @@ class GDEOptimizer():
 
         if self.config['normalize']:
             X, y, means, stds, _ = normalize_df_torch(self.df)
+        elif self.config['normalize'] is False and self.model==PhModel:
+            X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+            X = torch.tensor(X, dtype=torch.float32)
+            y = torch.tensor(y, dtype=torch.float32)
+            means = torch.tensor(self.df.iloc[:, :-2].mean(axis=0).values, dtype=torch.float32)
+            stds = torch.tensor(self.df.iloc[:, :-2].std(axis=0).values, dtype=torch.float32)
+
+            col_idx = self.df.columns.get_loc('Zero_eps_thickness')
+            model_factory = lambda: PhModel(zlt_mu_stds=(means[col_idx], stds[col_idx]), current_target=233)
         else:
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 
-        _, model = train_model_ens(X, y, self.model, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+        _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
         class Predictor(EnsembleModel):
             def __init__(self):
