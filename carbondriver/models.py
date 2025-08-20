@@ -55,8 +55,14 @@ class PhModel(torch.nn.Module):
         self.softmax = torch.nn.Softmax(dim=1)
         self.zlt_mu_stds = zlt_mu_stds
         self.current_target = current_target
+        # persistent forward counter to track how many times forward() was called
+        self._forward_counter = 0
 
     def forward(self, x):
+        # increment and print persistent forward counter
+        self._forward_counter += 1
+        print(f"\n ---PhModel.forward iteration: {self._forward_counter}---")
+
         # columns of x: AgCu Ratio, Naf vol (ul), Sust vol (ul), Zero_eps_thickness, Catalyst mass loading
         latents = self.net(x)
         r = 40e-9 * torch.exp(latents[..., [0]])

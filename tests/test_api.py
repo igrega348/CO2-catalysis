@@ -1,4 +1,6 @@
 from pathlib import Path
+import random 
+random.seed(40)
 
 # Path to this test file
 dir_above = Path(__file__).parent

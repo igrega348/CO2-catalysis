@@ -4,7 +4,7 @@ from .loaders import load_data, normalize_df_torch
 from .config import default_config
 import pandas as pd
 import torch
-
+#torch.autograd.set_detect_anomaly(True)
 from botorch.acquisition.analytic import ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
@@ -103,6 +103,8 @@ class GDEOptimizer():
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
+            model_factory = self.model
+
 
         _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
