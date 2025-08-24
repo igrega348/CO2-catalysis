@@ -15,6 +15,9 @@ class PhModel(torch.nn.Module):
     - Catalyst mass loading
 
     The model outputs the Faradaic efficiency of CO and C2H4.
+
+    Values of particle radius r and porosity ε are in
+    sensible ranges (40 nm < r < 65 nm, 0.5 < ε < 0.8).
     '''
     
     def __init__(
@@ -65,12 +68,26 @@ class PhModel(torch.nn.Module):
 
         # columns of x: AgCu Ratio, Naf vol (ul), Sust vol (ul), Zero_eps_thickness, Catalyst mass loading
         latents = self.net(x)
-        r = 40e-9 * torch.exp(latents[..., [0]])
+                    
+        # Clamp latents to prevent extreme values
+        latents = torch.clamp(latents, min=-10, max=10)
+        
+        r = 40e-9 * torch.exp(torch.clamp(latents[..., [0]], min=-2, max=2))  # More conservative exponential
         eps = torch.sigmoid(latents[..., [1]])
+        # Ensure eps and r are within sensible ranges (but use learned values, not random!)
+        eps = torch.clamp(eps, min=0.5, max=0.8)  # Clamp between 0.5 and 0.8
+        r = torch.clamp(r, min=40e-9, max=65e-9)  # Clamp between 40e-9 and 65e-9
+
         zlt = (x[..., 3]*self.zlt_mu_stds[1] + self.zlt_mu_stds[0]).view(-1,1)
-        L = zlt / (1 - eps)
-        K_dl_factor = torch.exp(latents[..., [2]])
+        # Prevent division by zero in L calculation
+        eps_safe = torch.clamp(eps, max=0.99)  # Ensure 1-eps > 0.01
+        L = zlt / (1 - eps_safe)
+        
+        K_dl_factor = torch.exp(torch.clamp(latents[..., [2]], min=-10, max=10))  # Prevent extreme exponentials
+        K_dl_factor = torch.clamp(K_dl_factor, min=1e-6, max=1e6)  # Ensure K_dl_factor is within sensible range
+        
         thetas = self.softmax(2*latents[..., 3:])
+        thetas = torch.clamp(thetas, min=1e-6, max=1)  # Ensure activations are within sensible range
         # CO activation must not be zero
         theta0 = thetas[...,[0]]
         theta1 = thetas[...,[1]]
@@ -81,7 +98,7 @@ class PhModel(torch.nn.Module):
             'H2b': theta2
         }
         gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
-
+        #print(f"r: {r}, eps: {eps}, K_dl_factor: {K_dl_factor}, thetas: {thetas}, gdl_mass_transfer_coefficient: {gdl_mass_transfer_coefficient}")
         solution = self.ph_model.solve_current(
             i_target=self.current_target,
             eps=eps,
@@ -92,6 +109,10 @@ class PhModel(torch.nn.Module):
             grid_size=1000,
             voltage_bounds=(-1.25,0)
         )
+        #for key, val in solution.items():
+            #print(f"Solution[{key}]: {val}")
+            #print(f" shape={tuple(val.shape)}")
+
         out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
         return out
 

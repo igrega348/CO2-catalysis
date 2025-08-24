@@ -114,7 +114,14 @@ class GDEOptimizer():
                 self._num_outputs = 1
         
             def forward(self, X=torch.zeros((1, X.shape[1]), dtype=torch.float32)):
-                return model(X.permute((1,0,2))).permute((2,0,1,3))
+                print(f"DEBUG - Predictor input X shape: {X.shape}")
+                X_permuted = X.permute((1,0,2))
+                print(f"DEBUG - After first permute: {X_permuted.shape}")
+                model_output = model(X_permuted)
+                print(f"DEBUG - Model output shape: {model_output.shape}")
+                result = model_output.permute((2,0,1,3))
+                print(f"DEBUG - Final result shape: {result.shape}")
+                return result
                 
         return Predictor()
 

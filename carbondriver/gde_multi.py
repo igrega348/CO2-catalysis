@@ -300,6 +300,15 @@ class System(torch.nn.Module):
         overpotential_CO = phi_ext - E_CO
         overpotential_C2H4 = phi_ext - self.electrode_reaction_potentials['E_0_C2H4']
         M = lambda k: torch.sqrt(k*L**2/DCO2)
+        # safe M/tanh(M) to avoid 0/0 when M -> 0. Use analytic limit = 1 for small M.
+        def safe_M_over_tanh(M_val: torch.Tensor, thresh: float = 1e-6):
+            # M_val can be tensor; for small |M| use limit 1.0
+            small = torch.abs(M_val) < thresh
+            tanh_M = torch.tanh(M_val)
+            # avoid dividing by extremely small tanh values
+            safe_tanh = torch.where(torch.abs(tanh_M) < thresh, torch.sign(tanh_M) * torch.tensor(thresh, device=tanh_M.device, dtype=tanh_M.dtype), tanh_M)
+            safe_div = M_val / safe_tanh
+            return torch.where(small, torch.ones_like(M_val), safe_div)
 
         # solve without equilibrium reactions
         k0_CO = A/(2*F) * self.electrode_reaction_kinetics['i_0_CO'] * thetas['CO']/self.chemical_reaction_rates['c_ref'] * torch.exp(
@@ -307,7 +316,7 @@ class System(torch.nn.Module):
         k0_C2H4 = A/(6*F) * self.electrode_reaction_kinetics['i_0_C2H4'] * thetas['C2H4']/self.chemical_reaction_rates['c_ref'] * torch.exp(
             -overpotential_C2H4 * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_C2H4'])
         k0 = k0_CO + k0_C2H4
-        eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
+        eff_0 = 1/(safe_M_over_tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
         c00 = Hnr*self.p0*eff_0
 
         # estimating OH- concentration
@@ -326,7 +335,7 @@ class System(torch.nn.Module):
 
         # update CO2 concentration 
         k1 = k0 + eps*self.chemical_reaction_rates['k1f']*c10
-        eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
+        eff_1 = 1/(safe_M_over_tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
         c01 = eff_1*self.p0*Hnr
         # update OH- concentration
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c01
@@ -359,13 +368,8 @@ class System(torch.nn.Module):
         )
 
         k2 = k0 + eps*self.chemical_reaction_rates['k1f']*c12
-        eff_2 = 1/(
-            torch.sqrt(
-                k2*L**2/DCO2
-            ) / torch.tanh(torch.sqrt(
-                k2*L**2/DCO2
-            )) + k2*L/gdl_mass_transfer_coeff
-        )
+        M_k2 = torch.sqrt(k2*L**2/DCO2)
+        eff_2 = 1/(safe_M_over_tanh(M_k2) + k2*L/gdl_mass_transfer_coeff)
         A_1_1 = (
             2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
         ) / (2*self.flow_channel_characteristics['K_L_CO3'])
@@ -393,12 +397,11 @@ class System(torch.nn.Module):
         fe_c2h4 = c2h4_current_density / current_density
         parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
         electrode = L*k0*c03
+        # use safe M/tanh for gdl flux term to avoid 0/0
+        M_k2_for_flux = torch.sqrt(k2*L**2/DCO2)
+        safe_tanh_flux = torch.where(torch.abs(torch.tanh(M_k2_for_flux)) < 1e-8, torch.sign(torch.tanh(M_k2_for_flux)) * torch.full_like(M_k2_for_flux, 1e-8), torch.tanh(M_k2_for_flux))
         gdl_flux = gdl_mass_transfer_coeff*(
-            Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(
-                k2*L**2/DCO2
-            ) / torch.tanh(
-                torch.sqrt(k2*L**2/DCO2)
-            )
+            Hnr_c(c12,c21)*self.p0 - c03 * (M_k2_for_flux / safe_tanh_flux)
         )
         hco3 = torch.minimum(
             HCO3_neg+Hnr_c(c12,c21)*self.p0,
