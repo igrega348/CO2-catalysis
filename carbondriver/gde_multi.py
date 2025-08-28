@@ -527,9 +527,19 @@ class System(torch.nn.Module):
 
         out = {}
         for k, v in solution.items():
-            if v.shape[0]==1:
-                v = v*torch.ones_like(eps)
-            out[k] = (1-p)*v.gather(dim=1, index=idx) + p*v.gather(dim=1, index=idx+1)
+            if v.shape[0] == 1:
+                v = v * torch.ones_like(eps)
+            # Squeeze to 2D [batch, grid]
+            if v.dim() == 3 and v.shape[0] == 1:
+                v_interp = v.squeeze(0)
+            elif v.dim() == 2:
+                v_interp = v
+            else:
+                v_interp = v.view(v.shape[0], -1)
+                print('Weird shapes for v, flattened to 1-D.', v.shape, '->', v_interp.shape)
+            # Clamp indices for this tensor (grid length may differ theoretically)
+            idx_clamped = torch.clamp(idx, min=0, max=v_interp.shape[1]-2)
+            out[k] = (1-p)*v_interp.gather(dim=1, index=idx_clamped) + p*v_interp.gather(dim=1, index=idx_clamped+1)
             
         if return_init_residual: # return the distance to closest original current density
             return out, torch.minimum(torch.abs(i_target - curr_left), torch.abs(i_target - curr_right))
