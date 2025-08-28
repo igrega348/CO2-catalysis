@@ -497,12 +497,29 @@ class System(torch.nn.Module):
         I = solution['current_density'].detach()
 
         i_target = i_target.reshape(-1,1)
+        # Normalize current density tensor to 2D [batch, grid] for interpolation
+        # (common case initial shape: [1, batch, grid])
+        if I.dim() == 3 and I.shape[0] == 1:
+            I_boundaries = I.squeeze(0)
+        elif I.dim() == 2:
+            I_boundaries = I
+        else:
+            # Generic fallback: merge all trailing dims into grid dimension
+            I_boundaries = I.view(I.shape[0], -1)
 
-        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
-        idx = torch.clamp(idx,min=0, max=I.shape[1]-2) # clamp to avoid out of bounds
-        
-        curr_left = I.gather(dim=1, index=idx)
-        curr_right = I.gather(dim=1, index=idx+1)
+        # Row-wise searchsorted (torch.searchsorted currently expects 1D boundaries)
+        idx_list = []
+        for b in range(I_boundaries.shape[0]):
+            boundaries_row = I_boundaries[b]
+            target_row = i_target[b].squeeze() if i_target[b].dim() > 0 else i_target[b]
+            idx_b = torch.searchsorted(boundaries_row, target_row, side='right') - 1
+            idx_list.append(idx_b)
+        idx = torch.stack(idx_list, dim=0).view(i_target.shape)
+
+        # Clamp indices to valid interpolation range
+        idx = torch.clamp(idx, min=0, max=I_boundaries.shape[1]-2)
+        curr_left = I_boundaries.gather(dim=1, index=idx)
+        curr_right = I_boundaries.gather(dim=1, index=idx+1)
         denom = curr_right - curr_left
         epsilon = 1e-10  # Small value to avoid division by zero
         denom_safe = torch.where(torch.abs(denom) < epsilon, torch.full_like(denom, fill_value=epsilon), other=denom)
