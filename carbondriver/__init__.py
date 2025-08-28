@@ -5,7 +5,7 @@ from .config import default_config
 import pandas as pd
 import torch
 #torch.autograd.set_detect_anomaly(True)
-from botorch.acquisition.analytic import ExpectedImprovement
+from botorch.acquisition.analytic import LogExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
@@ -21,7 +21,7 @@ class GDEOptimizer():
         Initialize the optimizer with the specified model and acquisition function.
 
         :param model_name: Name of the model to use (e.g., 'GP', 'Ph', 'MLP', 'GP+Ph')
-        :param aquisition: Acquisition function to use (e.g., 'EI' for Expected Improvement)
+        :param aquisition: Acquisition function to use (e.g., 'EI' for Log Expected Improvement)
         :param quantity: The quantity to optimize (e.g., 'FE (Eth)')
         :param maximize: Whether to maximize or minimize the quantity
         :param output_dir: Directory to save output files
@@ -114,13 +114,23 @@ class GDEOptimizer():
                 self._num_outputs = 1
         
             def forward(self, X=torch.zeros((1, X.shape[1]), dtype=torch.float32)):
-                print(f"DEBUG - Predictor input X shape: {X.shape}")
+
                 X_permuted = X.permute((1,0,2))
-                print(f"DEBUG - After first permute: {X_permuted.shape}")
+
                 model_output = model(X_permuted)
-                print(f"DEBUG - Model output shape: {model_output.shape}")
-                result = model_output.permute((2,0,1,3))
-                print(f"DEBUG - Final result shape: {result.shape}")
+
+                # Handle different output dimensions
+                if model_output.dim() == 3:
+                    # Output is [ensemble, batch, features] -> [batch, ensemble, features]
+                    result = model_output.permute((1, 0, 2))
+                elif model_output.dim() == 4:
+                    # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
+                    result = model_output.permute((2, 0, 1, 3))
+                else:
+                    # Fallback: return as is
+                    result = model_output
+                
+                #print(f"DEBUG - Final result shape: {result.shape}")
                 return result
                 
         return Predictor()
@@ -130,7 +140,7 @@ class GDEOptimizer():
         Get the acquisition function based on the specified acquisition type.
         """
         if self.aquisition == "EI":
-            return ExpectedImprovement(
+            return LogExpectedImprovement(
                 predictor,
                 best_f=torch.tensor(self.df[self.quantity].max()),
                 maximize=self.maximize
