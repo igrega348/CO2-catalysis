@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import torch
 import gpytorch
 from carbondriver import gde_multi
@@ -21,11 +21,13 @@ class PhModel(torch.nn.Module):
     '''
     
     def __init__(
-        self, 
-        zlt_mu_stds: Tuple,
+        self,
+        zlt_mu: float,
+        zlt_sigma: float,
         current_target: float = 200,
-        dropout: float = 0.1, 
+        dropout: float = 0.1,
         ldim: int = 64,
+        config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self.net = torch.nn.Sequential(
@@ -56,8 +58,12 @@ class PhModel(torch.nn.Module):
             chemical_reaction_rates=gde_multi.chemical_reaction_rates,
         )
         self.softmax = torch.nn.Softmax(dim=1)
-        self.zlt_mu_stds = zlt_mu_stds
+        # zero-eps thickness normalization stats
+        self.zlt_mu = float(zlt_mu)
+        self.zlt_sigma = float(zlt_sigma)
         self.current_target = current_target
+        # configuration (normalization status is read from here only)
+        self.config = config or {"normalize": False}
         # persistent forward counter to track how many times forward() was called
         self._forward_counter = 0
 
@@ -78,7 +84,11 @@ class PhModel(torch.nn.Module):
         eps = torch.clamp(eps, min=0.5, max=0.8)  # Clamp between 0.5 and 0.8
         r = torch.clamp(r, min=40e-9, max=65e-9)  # Clamp between 40e-9 and 65e-9
 
-        zlt = (x[..., 3]*self.zlt_mu_stds[1] + self.zlt_mu_stds[0]).view(-1,1)
+        # If inputs are normalized, denormalize Zero_eps_thickness (feature index 3)
+        if bool(self.config.get("normalize", False)):
+            zlt = (x[..., 3] * self.zlt_sigma + self.zlt_mu).view(-1, 1)
+        else:
+            zlt = x[..., 3].view(-1, 1)
         # Prevent division by zero in L calculation
         eps_safe = torch.clamp(eps, max=0.99)  # Ensure 1-eps > 0.01
         L = zlt / (1 - eps_safe)
@@ -162,6 +172,7 @@ class MyMean(gpytorch.means.Mean):
         if model is not None:
             self.model = model
         else:
+            print('No model provided, using default PhModel with placeholder parameters.')
             self.model = PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233)
         
         if freeze_model:

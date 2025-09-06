@@ -89,16 +89,34 @@ class GDEOptimizer():
         self.df = pd.concat([self.df, new_data], axis=0)
 
         if self.config['normalize']:
+            # Normalize inputs; outputs remain unnormalized
             X, y, means, stds, _ = normalize_df_torch(self.df)
-        elif self.config['normalize'] is False and self.model==PhModel:
+            if self.model == PhModel:
+                # Pass Zero_eps_thickness stats so model can denormalize that feature
+                mu = float(means['Zero_eps_thickness'])
+                sigma = float(stds['Zero_eps_thickness'])
+                model_factory = lambda: PhModel(
+                    zlt_mu=mu,
+                    zlt_sigma=sigma,
+                    current_target=233,
+                    config=self.config,
+                )
+            else:
+                model_factory = self.model
+        elif self.config['normalize'] is False and self.model == PhModel:
+            # No normalization: compute tensors directly but still provide stats for completeness
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
-            means = torch.tensor(self.df.iloc[:, :-2].mean(axis=0).values, dtype=torch.float32)
-            stds = torch.tensor(self.df.iloc[:, :-2].std(axis=0).values, dtype=torch.float32)
-
-            col_idx = self.df.columns.get_loc('Zero_eps_thickness')
-            model_factory = lambda: PhModel(zlt_mu_stds=(means[col_idx], stds[col_idx]), current_target=233)
+            # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
+            mu = float(self.df['Zero_eps_thickness'].mean())
+            sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
+            model_factory = lambda: PhModel(
+                zlt_mu=mu,
+                zlt_sigma=sigma,
+                current_target=233,
+                config=self.config,
+            )
         else:
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
