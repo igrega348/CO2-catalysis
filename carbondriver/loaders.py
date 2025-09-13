@@ -83,3 +83,37 @@ def normalize_df_torch(df: pd.DataFrame, means: Optional[pd.DataFrame] = None, s
     X = torch.tensor(X, dtype=torch.float32)
     y = torch.tensor(y, dtype=torch.float32)
     return X, y, means, stds, df
+
+
+def feature_stats(
+    df: pd.DataFrame,
+    all_means: Optional[pd.Series] = None,
+    all_stds: Optional[pd.Series] = None,
+    as_torch: bool = True,
+):
+    """
+    Return per-feature means/stds (excluding the last two target columns).
+
+    Parameters
+    - df: full dataframe with features first and last two columns as targets.
+    - all_means, all_stds: optional precomputed stats across all columns (as returned by normalize_df_torch or load_data).
+    - as_torch: return tensors if True, else pandas Series.
+
+    Notes
+    - If all_means/all_stds are provided, we subset them to feature columns.
+    - Otherwise, we compute stats over feature columns only.
+    """
+    feat_cols = df.columns[:-2]
+    if all_means is not None and all_stds is not None:
+        m = all_means[feat_cols]
+        s = all_stds[feat_cols]
+    else:
+        m = df[feat_cols].mean()
+        s = df[feat_cols].std(ddof=0)
+    if as_torch:
+        return (
+            torch.tensor(m.values, dtype=torch.float32),
+            torch.tensor(s.values, dtype=torch.float32),
+        )
+    else:
+        return m, s

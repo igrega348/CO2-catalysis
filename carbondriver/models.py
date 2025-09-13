@@ -70,7 +70,7 @@ class PhModel(torch.nn.Module):
     def forward(self, x):
         # increment and print persistent forward counter
         self._forward_counter += 1
-        print(f"\n ---PhModel.forward iteration: {self._forward_counter}---")
+        #print(f"\n ---PhModel.forward iteration: {self._forward_counter}---")
 
         # columns of x: AgCu Ratio, Naf vol (ul), Sust vol (ul), Zero_eps_thickness, Catalyst mass loading
         latents = self.net(x)
