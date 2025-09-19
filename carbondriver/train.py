@@ -196,10 +196,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
 
     return stats, predict
 
-
-# In[13]:
-
-
 def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)

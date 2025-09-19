@@ -1,9 +1,11 @@
+import gpytorch
 from .models import PhModel, MLPModel, MultitaskGPModel, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
 from .loaders import load_data, normalize_df_torch, feature_stats
 from .config import default_config
 import pandas as pd
 import torch
+import numpy as np
 #torch.autograd.set_detect_anomaly(True)
 from botorch.acquisition.analytic import LogExpectedImprovement
 from botorch.optim import optimize_acqf
@@ -73,7 +75,7 @@ class GDEOptimizer():
             bds_min = self.df.iloc[:, :-2].values.min(axis=0)
             raw_bounds = torch.tensor([bds_min, bds_max], dtype=torch.float32)
             # Debug: show computed raw bounds
-            print(f"[bounds] raw min: {raw_bounds[0].tolist()} raw max: {raw_bounds[1].tolist()}")
+            #print(f"[bounds] raw min: {raw_bounds[0].tolist()} raw max: {raw_bounds[1].tolist()}")
             return raw_bounds
         else:
             return self._bounds
@@ -99,10 +101,7 @@ class GDEOptimizer():
             X, y, means, stds, _ = normalize_df_torch(self.df)
             # Store feature-only means/stds for later bound transforms
             self._feature_means, self._feature_stds = feature_stats(self.df, means, stds, as_torch=True)
-            # Debug prints
-            print(f"[get_predictor] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
-            print(f"[get_predictor] feature means: {self._feature_means.tolist()}")
-            print(f"[get_predictor] feature stds: {self._feature_stds.tolist()}")
+
             if self.model == PhModel:
                 # Pass Zero_eps_thickness stats so model can denormalize that feature
                 mu = float(means['Zero_eps_thickness'])
@@ -129,6 +128,7 @@ class GDEOptimizer():
                 current_target=233,
                 config=self.config,
             )
+
         else:
             X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
@@ -145,7 +145,6 @@ class GDEOptimizer():
         
             def forward(self, X: torch.Tensor):
                 # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
-                print(f"[Predictor.forward] received X shape: {tuple(X.shape)}")
                 if X.dim() == 3 and X.shape[1] == 1:
                     X_in = X.squeeze(1)  # (batch, d)
                 elif X.dim() == 2:
@@ -153,13 +152,8 @@ class GDEOptimizer():
                 else:
                     # Attempt to reshape conservatively: collapse all but last dim into batch
                     X_in = X.view(-1, X.shape[-1])
-                print(f"[Predictor.forward] using X_in shape: {tuple(X_in.shape)}")
 
                 model_output = model(X_in)
-                try:
-                    print(f"[Predictor.forward] model_output shape: {tuple(model_output.shape)}")
-                except Exception:
-                    pass
 
                 # Handle different output dimensions
                 if model_output.dim() == 3:
@@ -172,13 +166,13 @@ class GDEOptimizer():
                     # Fallback: return as is
                     result = model_output
                 
-                #print(f"DEBUG - Final result shape: {result.shape}")
                 try:
                     print(f"[Predictor.forward] result shape: {tuple(result.shape)}")
                 except Exception:
                     pass
+
                 return result
-                
+
         return Predictor()
 
     def _get_acquisition_function(self, predictor):
@@ -187,7 +181,7 @@ class GDEOptimizer():
         """
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
-            print(f"[_get_acquisition_function] Using LogEI | best_f={best_f.item():.6f} | maximize={self.maximize}")
+            #print(f"[_get_acquisition_function] Using LogEI | best_f={best_f.item():.6f} | maximize={self.maximize}")
             return LogExpectedImprovement(
                 predictor,
                 best_f=best_f,
@@ -207,23 +201,23 @@ class GDEOptimizer():
         :return: The acquisition function value and the next experiment parameters
         """
 
-        print(f"[step] normalize flag: {self.config.get('normalize', False)}")
+        #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
 
         predictor = self.get_predictor(new_data)
 
         AF = self._get_acquisition_function(predictor)
 
         # Determine raw bounds (always in original feature scale)
+        # Use the property-created tensor by default. If the caller supplied `bounds`,
+        # require that it already be a torch.Tensor.
         raw_bounds = self.bounds if bounds is None else bounds
-        if not isinstance(raw_bounds, torch.Tensor):
-            import numpy as _np
-            if isinstance(raw_bounds, (list, tuple)):
-                raw_bounds = torch.from_numpy(_np.asarray(raw_bounds, dtype=_np.float32))
-            else:
-                raw_bounds = torch.tensor(raw_bounds, dtype=torch.float32)
+        if bounds is not None and not isinstance(raw_bounds, torch.Tensor):
+            raise TypeError(
+                "bounds must be a torch.Tensor of shape (2, d). "
+                "Convert lists/arrays with torch.as_tensor(..., dtype=torch.float32) before calling step."
+            )
         assert raw_bounds.shape[0] == 2, "Bounds should have shape (2, d)"
-        d = raw_bounds.shape[1]
-        print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
+        #print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
 
         # Select the output column index for the quantity by name from the last two columns
         target_cols = list(self.df.columns[-2:])
@@ -231,10 +225,21 @@ class GDEOptimizer():
             target_idx = target_cols.index(self.quantity)
         except ValueError:
             raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
-        print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
+        #print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
 
         # If normalized, convert bounds to normalized space using stored stats
-        use_norm = bool(self.config.get('normalize', False))
+        # Require an explicit boolean in the config to avoid surprising truthiness.
+        if 'normalize' not in self.config:
+            raise ValueError("config key 'normalize' not specified. Please set config['normalize'] to True or False.")
+        cfg_norm = self.config['normalize']
+        if cfg_norm is True:
+            use_norm = True
+        elif cfg_norm is False:
+            use_norm = False
+        else:
+            raise ValueError(
+                f"Invalid value for config['normalize']: {cfg_norm!r}. Expected True or False (possible typo)."
+            )
         if use_norm:
             if self._feature_means is None or self._feature_stds is None:
                 # Fall back: compute from current df
@@ -246,7 +251,7 @@ class GDEOptimizer():
                 (raw_bounds[0] - means) / stds_safe,
                 (raw_bounds[1] - means) / stds_safe,
             ], dim=0)
-            print(f"[step] normalized bounds min: {bounds_norm[0].tolist()} max: {bounds_norm[1].tolist()}")
+            #print(f"[step] normalized bounds min: {bounds_norm[0].tolist()} max: {bounds_norm[1].tolist()}")
             opt_bounds = bounds_norm
         else:
             opt_bounds = raw_bounds
@@ -255,11 +260,11 @@ class GDEOptimizer():
         def acq_wrapper(x: torch.Tensor):
             # x is expected to be (batch, q, d) by botorch
             vals = AF(x)
-            try:
-                shape_info = tuple(vals.shape)
-            except Exception:
-                shape_info = 'unknown'
-            print(f"[acq_wrapper] AF input shape: {tuple(x.shape)} | AF output shape: {shape_info}")
+            #try:
+            #    shape_info = tuple(vals.shape)
+            #except Exception:
+            #    shape_info = 'unknown'
+            #print(f"[acq_wrapper] AF input shape: {tuple(x.shape)} | AF output shape: {shape_info}")
             if isinstance(vals, torch.Tensor):
                 b = x.shape[0]
                 # Case: (batch, ensemble, m)
@@ -331,7 +336,7 @@ class GDEOptimizer():
             X, y, means, stds, _ = normalize_df_torch(possible_data)
             # Persist feature stats for consistency when mixing calls
             self._feature_means, self._feature_stds = feature_stats(possible_data, means, stds, as_torch=True)
-            print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
+            #print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
         else:
             X, y = possible_data.iloc[:, :-2].values, possible_data.iloc[:, -2:].values
             X = torch.tensor(X, dtype=torch.float32)
@@ -340,10 +345,10 @@ class GDEOptimizer():
         AF = self._get_acquisition_function(predictor)
         
         scores = AF(X.unsqueeze(1))
-        try:
-            print(f"[step_within_data] AF scores shape: {tuple(scores.shape)}")
-        except Exception:
-            pass
+        #try:
+            #print(f"[step_within_data] AF scores shape: {tuple(scores.shape)}")
+        #except Exception:
+            #pass
         
         self.i += 1
 
