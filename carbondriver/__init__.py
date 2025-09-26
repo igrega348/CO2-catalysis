@@ -1,5 +1,5 @@
 import gpytorch
-from .models import PhModel, MLPModel, MultitaskGPModel, MultitaskGPhysModel
+from .models import PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
 from .loaders import load_data, normalize_df_torch, feature_stats
 from .config import default_config
@@ -96,6 +96,50 @@ class GDEOptimizer():
         
         self.df = pd.concat([self.df, new_data], axis=0)
 
+        # Special handling for GP and GP+Ph models: these use gpytorch training functions
+        # (they are not compatible with the ensemble training pipeline used for MLP/Ph).
+        if self.model == MultitaskGPModel:
+            # Normalize if requested
+            if self.config['normalize']:
+                X, y, means, stds, _ = normalize_df_torch(self.df)
+                self._feature_means, self._feature_stds = feature_stats(self.df, means, stds, as_torch=True)
+            else:
+                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X = torch.tensor(X, dtype=torch.float32)
+                y = torch.tensor(y, dtype=torch.float32)
+
+            # Train GP and return BoTorch-compatible model
+            _, _, gp_model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            
+            # Return BoTorch-compatible wrapper
+            return BoTorchGP (gp_model, likelihood)
+
+
+        if self.model == MultitaskGPhysModel:
+            # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
+            if self.config['normalize']:
+                X, y, means, stds, _ = normalize_df_torch(self.df)
+                self._feature_means, self._feature_stds = feature_stats(self.df, means, stds, as_torch=True)
+                # zero-eps stats for PhModel
+                mu = float(means['Zero_eps_thickness'])
+                sigma = float(stds['Zero_eps_thickness'])
+            else:
+                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X = torch.tensor(X, dtype=torch.float32)
+                y = torch.tensor(y, dtype=torch.float32)
+                mu = float(self.df['Zero_eps_thickness'].mean())
+                sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
+
+            ph_model_constructor = lambda: PhModel(zlt_mu=mu, zlt_sigma=sigma, current_target=233, config=self.config)
+
+            # Train GP+Ph and return BoTorch-compatible model
+            _, _, gp_model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            
+            # Return BoTorch-compatible wrapper
+            return BoTorchGP(gp_model, likelihood)
+
+
+        # Handle ensemble models (MLP and Ph)
         if self.config['normalize']:
             # Normalize inputs; outputs remain unnormalized
             X, y, means, stds, _ = normalize_df_torch(self.df)

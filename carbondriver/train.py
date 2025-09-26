@@ -11,6 +11,9 @@ import gpytorch
 import matplotlib.pyplot as plt
 from math import ceil
 from rich.progress import track
+from carbondriver.models import MultitaskGPhysModel, MultitaskGPModel
+
+
 
 def get_cov(batch):
     batch = batch.reshape(*batch.shape[:-2], -1)

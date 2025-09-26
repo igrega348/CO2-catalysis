@@ -2,6 +2,9 @@ from typing import Tuple, Optional, Dict, Any
 import torch
 import gpytorch
 from carbondriver import gde_multi
+from botorch.models.gpytorch import GPyTorchModel
+from gpytorch.distributions import MultitaskMultivariateNormal
+
 
 class PhModel(torch.nn.Module):
     '''
@@ -147,6 +150,18 @@ class MLPModel(torch.nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
+
+class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
+    def __init__(self, model, likelihood):
+        super().__init__()
+        self.model = model
+        self.likelihood = likelihood
+        self._num_outputs = 1
+
+    def forward(self, x):
+        mean_x = self.model.mean_module(x)
+        covar_x = self.model.covar_module(x)
+        return MultitaskMultivariateNormal(mean_x, covar_x)
 
 class MultitaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
