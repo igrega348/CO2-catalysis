@@ -159,9 +159,12 @@ class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
         self._num_outputs = 1
 
     def forward(self, x):
-        mean_x = self.model.mean_module(x)
-        covar_x = self.model.covar_module(x)
-        return MultitaskMultivariateNormal(mean_x, covar_x)
+        x_in = x
+        if x.dim() == 3 and x.shape[1] == 1:
+            x_in = x.squeeze(1) #Ensure correct shape for model input
+            print('X input shape:', x_in.shape)
+        mvn = self.model(x_in) #delegate to the underlying ExactGP's forward (i.e., call self.model(x_in))
+        return mvn
 
 class MultitaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):

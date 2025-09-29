@@ -210,10 +210,6 @@ class GDEOptimizer():
                     # Fallback: return as is
                     result = model_output
                 
-                try:
-                    print(f"[Predictor.forward] result shape: {tuple(result.shape)}")
-                except Exception:
-                    pass
 
                 return result
 
@@ -225,11 +221,22 @@ class GDEOptimizer():
         """
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
-            #print(f"[_get_acquisition_function] Using LogEI | best_f={best_f.item():.6f} | maximize={self.maximize}")
+            # Select the correct output index (from the last two columns)
+            target_cols = list(self.df.columns[-2:])
+            try:
+                target_idx = target_cols.index(self.quantity)
+            except ValueError:
+                raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
+            # Use a posterior transform to reduce to single-output for analytic EI
+            weights = torch.zeros(2, dtype=torch.float32)
+            weights[target_idx] = 1.0
+            post_tf = ScalarizedPosteriorTransform(weights=weights)
+            #print(f"[_get_acquisition_function] Using LogEI | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
             return LogExpectedImprovement(
                 predictor,
                 best_f=best_f,
-                maximize=self.maximize
+                maximize=self.maximize,
+                posterior_transform=post_tf,
             )
         else:
             raise ValueError("Unsupported acquisition function.")
@@ -387,12 +394,7 @@ class GDEOptimizer():
             y = torch.tensor(y, dtype=torch.float32)
 
         AF = self._get_acquisition_function(predictor)
-        
         scores = AF(X.unsqueeze(1))
-        #try:
-            #print(f"[step_within_data] AF scores shape: {tuple(scores.shape)}")
-        #except Exception:
-            #pass
         
         self.i += 1
 
