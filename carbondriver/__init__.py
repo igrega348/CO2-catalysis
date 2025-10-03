@@ -115,7 +115,7 @@ class GDEOptimizer():
             return BoTorchGP (gp_model, likelihood)
 
 
-        if self.model == MultitaskGPhysModel:
+        elif self.model == MultitaskGPhysModel:
             # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
             if self.config['normalize']:
                 X, y, means, stds, _ = normalize_df_torch(self.df)
@@ -138,18 +138,35 @@ class GDEOptimizer():
             # Return BoTorch-compatible wrapper
             return BoTorchGP(gp_model, likelihood)
 
-
         # Handle ensemble models (MLP and Ph)
-        if self.config['normalize']:
-            # Normalize inputs; outputs remain unnormalized
-            X, y, means, stds, _ = normalize_df_torch(self.df)
-            # Store feature-only means/stds for later bound transforms
-            self._feature_means, self._feature_stds = feature_stats(self.df, means, stds, as_torch=True)
+        else:
+            if self.config['normalize']:
+                # Normalize inputs; outputs remain unnormalized
+                X, y, means, stds, _ = normalize_df_torch(self.df)
+                # Store feature-only means/stds for later bound transforms
+                self._feature_means, self._feature_stds = feature_stats(self.df, means, stds, as_torch=True)
 
-            if self.model == PhModel:
-                # Pass Zero_eps_thickness stats so model can denormalize that feature
-                mu = float(means['Zero_eps_thickness'])
-                sigma = float(stds['Zero_eps_thickness'])
+                if self.model == PhModel:
+                    # Pass Zero_eps_thickness stats so model can denormalize that feature
+                    mu = float(means['Zero_eps_thickness'])
+                    sigma = float(stds['Zero_eps_thickness'])
+                    model_factory = lambda: PhModel(
+                        zlt_mu=mu,
+                        zlt_sigma=sigma,
+                        current_target=233,
+                        config=self.config,
+                    )
+                else:
+                    # MLP model with normalization
+                    model_factory = self.model
+            elif self.config['normalize'] is False and self.model == PhModel:
+                # No normalization: compute tensors directly but still provide stats for completeness
+                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X = torch.tensor(X, dtype=torch.float32)
+                y = torch.tensor(y, dtype=torch.float32)
+                # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
+                mu = float(self.df['Zero_eps_thickness'].mean())
+                sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
                 model_factory = lambda: PhModel(
                     zlt_mu=mu,
                     zlt_sigma=sigma,
@@ -157,63 +174,45 @@ class GDEOptimizer():
                     config=self.config,
                 )
             else:
+                # No normalization for MLP model or other cases
+                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X = torch.tensor(X, dtype=torch.float32)
+                y = torch.tensor(y, dtype=torch.float32)
                 model_factory = self.model
-        elif self.config['normalize'] is False and self.model == PhModel:
-            # No normalization: compute tensors directly but still provide stats for completeness
-            X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
-            X = torch.tensor(X, dtype=torch.float32)
-            y = torch.tensor(y, dtype=torch.float32)
-            # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
-            mu = float(self.df['Zero_eps_thickness'].mean())
-            sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
-            model_factory = lambda: PhModel(
-                zlt_mu=mu,
-                zlt_sigma=sigma,
-                current_target=233,
-                config=self.config,
-            )
 
-        else:
-            X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
-            X = torch.tensor(X, dtype=torch.float32)
-            y = torch.tensor(y, dtype=torch.float32)
-            model_factory = self.model
+            _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
+            class Predictor(EnsembleModel):
+                def __init__(self):
+                    super().__init__()
+                    self._num_outputs = 1
+            
+                def forward(self, X: torch.Tensor):
+                    # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
+                    if X.dim() == 3 and X.shape[1] == 1:
+                        X_in = X.squeeze(1)  # (batch, d)
+                    elif X.dim() == 2:
+                        X_in = X  # already (batch, d)
+                    else:
+                        # Attempt to reshape conservatively: collapse all but last dim into batch
+                        X_in = X.view(-1, X.shape[-1])
 
-        _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+                    model_output = model(X_in)
 
-        class Predictor(EnsembleModel):
-            def __init__(self):
-                super().__init__()
-                self._num_outputs = 1
-        
-            def forward(self, X: torch.Tensor):
-                # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
-                if X.dim() == 3 and X.shape[1] == 1:
-                    X_in = X.squeeze(1)  # (batch, d)
-                elif X.dim() == 2:
-                    X_in = X  # already (batch, d)
-                else:
-                    # Attempt to reshape conservatively: collapse all but last dim into batch
-                    X_in = X.view(-1, X.shape[-1])
+                    # Handle different output dimensions
+                    if model_output.dim() == 3:
+                        # Output is [ensemble, batch, features] -> [batch, ensemble, features]
+                        result = model_output.permute((1, 0, 2))
+                    elif model_output.dim() == 4:
+                        # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
+                        result = model_output.permute((2, 0, 1, 3))
+                    else:
+                        # Fallback: return as is
+                        result = model_output
 
-                model_output = model(X_in)
+                    return result
 
-                # Handle different output dimensions
-                if model_output.dim() == 3:
-                    # Output is [ensemble, batch, features] -> [batch, ensemble, features]
-                    result = model_output.permute((1, 0, 2))
-                elif model_output.dim() == 4:
-                    # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
-                    result = model_output.permute((2, 0, 1, 3))
-                else:
-                    # Fallback: return as is
-                    result = model_output
-                
-
-                return result
-
-        return Predictor()
+            return Predictor()
 
     def _get_acquisition_function(self, predictor):
         """
@@ -227,17 +226,29 @@ class GDEOptimizer():
                 target_idx = target_cols.index(self.quantity)
             except ValueError:
                 raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
-            # Use a posterior transform to reduce to single-output for analytic EI
-            weights = torch.zeros(2, dtype=torch.float32)
-            weights[target_idx] = 1.0
-            post_tf = ScalarizedPosteriorTransform(weights=weights)
-            #print(f"[_get_acquisition_function] Using LogEI | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-            return LogExpectedImprovement(
-                predictor,
-                best_f=best_f,
-                maximize=self.maximize,
-                posterior_transform=post_tf,
-            )
+            
+            # Check if this is a GP model (BoTorchGP wrapper) or ensemble model
+            if hasattr(predictor, 'model') and hasattr(predictor.model, 'likelihood'):
+                # This is a GP model - use posterior transform
+                weights = torch.zeros(2, dtype=torch.float32)
+                weights[target_idx] = 1.0
+                post_tf = ScalarizedPosteriorTransform(weights=weights)
+                #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
+                return LogExpectedImprovement(
+                    predictor,
+                    best_f=best_f,
+                    maximize=self.maximize,
+                    posterior_transform=post_tf,
+                )
+            else:
+                # This is an ensemble model - use LogEI without posterior transform
+                # The acq_wrapper will handle target selection
+                #print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
+                return LogExpectedImprovement(
+                    predictor,
+                    best_f=best_f,
+                    maximize=self.maximize,
+                )
         else:
             raise ValueError("Unsupported acquisition function.")
     
@@ -297,7 +308,7 @@ class GDEOptimizer():
                 self._feature_means, self._feature_stds = feature_stats(self.df, as_torch=True)
             means, stds = self._feature_means, self._feature_stds
             # Prevent division by zero
-            stds_safe = torch.where(stds == 0, torch.tensor(1.0, dtype=stds.dtype), stds)
+            stds_safe = torch.where(stds == 0, torch.tensor(1.0, dtype=torch.float32), stds)
             bounds_norm = torch.stack([
                 (raw_bounds[0] - means) / stds_safe,
                 (raw_bounds[1] - means) / stds_safe,
