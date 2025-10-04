@@ -13,7 +13,7 @@ def test_import():
 
     gde = GDEOptimizer(output_dir="./tmp_test_out")
 
-def test_gde_optimizer_within():
+def test_gde_optimizer_within_GPPH():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
 
@@ -63,7 +63,7 @@ def test_gde_optimizer_within_GP():
 
     print("Second pick", ei, int(next_pick))
 
-def test_gde_optimizer_free():
+def test_gde_optimizer_free_GPPh():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_data
 

@@ -39,6 +39,10 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         fig, ax = plt.subplots(ncols=3, figsize=(10,3))
         ax[1].axline((0,0), slope=1, c='k', ls='--')
         ax[2].axline((0,0), slope=1, c='k', ls='--')
+        # Clarify what each subplot shows: NLL and parity plots for the two FE targets
+        ax[0].set_title('NLL (per-dimension) — lower is better')
+        ax[1].set_title('Parity plot: FE (C2H5OH, Ethanol)')
+        ax[2].set_title('Parity plot: FE (CO, Carbon monoxide)')
 
     # set up model and optimizer
     num_models = 2
@@ -107,6 +111,23 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         ax[1].errorbar(y_train[:, 0].numpy(), mean_train[:,0].numpy(), yerr=std_train[:, 0].numpy(), fmt='o', alpha=0.5, mfc=f'C0', mec='white')
         ax[2].errorbar(y_train[:, 1].numpy(), mean_train[:,1].numpy(), yerr=std_train[:, 1].numpy(), fmt='o', alpha=0.5, mfc=f'C0', mec='white')
         fig.tight_layout()
+        # Add axis labels and more descriptive titles
+
+        ax[0].set_xlabel('iteration')
+        ax[0].set_ylabel('NLL (per-dimension)')
+        ax[1].set_xlabel('true FE (C2H5OH)')
+        ax[1].set_ylabel('predicted mean FE (C2H5OH)')
+        ax[2].set_xlabel('true FE (CO)')
+        ax[2].set_ylabel('predicted mean FE (CO)')
+        # Ensure titles/labels render across backends: set again just before draw with padding
+        ax[0].set_title(ax[0].get_title(), fontsize=11, pad=8, weight='semibold')
+        ax[1].set_title(ax[1].get_title(), fontsize=11, pad=8, weight='semibold')
+        ax[2].set_title(ax[2].get_title(), fontsize=11, pad=8, weight='semibold')
+        # Add a small figure-level suptitle to clarify what the panels represent
+        fig.suptitle('Training diagnostics (NLL and parity plots)', fontsize=12, y=0.98)
+        # reserve space so titles/suptitle are not clipped
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+
         plt.show()
     # save average losses to file
     stats.to_csv(DNAME/f'stats_{i:02d}.csv')
@@ -119,10 +140,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
     return stats, scaled_model
 
-
-# In[ ]:
-
-
 def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, plot=False):
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True, parents=True)
@@ -131,10 +148,8 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
         ax[1].axline((0,0), slope=1, c='k', ls='--')
         ax[2].axline((0,0), slope=1, c='k', ls='--')
 
-    # set up model and optimizer
     likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=2)
     model = MultitaskGPModel(X_train, y_train, likelihood)
-
     # Use the adam optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
@@ -182,7 +197,25 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
         # plot parity plots with confidence intervals
         ax[1].errorbar(y_train[:,0].numpy(), mean_train[:,0].numpy(), yerr=std_train[:,0].numpy(), fmt='o', alpha=0.5, mfc=f'C{i}', mec='white')
         ax[2].errorbar(y_train[:,1].numpy(), mean_train[:,1].numpy(), yerr=std_train[:,1].numpy(), fmt='o', alpha=0.5, mfc=f'C{i}', mec='white')
-        fig.tight_layout()
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        # Add axis labels and titles for clarity
+        """
+        ax[0].set_title('Loss (train) over iterations')
+        ax[0].set_xlabel('iteration')
+        ax[0].set_ylabel('negative marginal log likelihood')
+        ax[1].set_title('Parity plot: FE (C2H5OH, Ethanol)')
+        ax[1].set_xlabel('true FE (C2H5OH, Ethanol)')
+        ax[1].set_ylabel('predicted mean FE (C2H5OH, Ethanol)')
+        ax[2].set_title('Parity plot: FE (CO)')
+        ax[2].set_xlabel('true FE (CO)')
+        ax[2].set_ylabel('predicted mean FE (CO)')
+        # Force title draw and short pause for some interactive backends, with padding
+        ax[0].set_title(ax[0].get_title(), fontsize=11, pad=8, weight='semibold')
+        ax[1].set_title(ax[1].get_title(), fontsize=11, pad=8, weight='semibold')
+        ax[2].set_title(ax[2].get_title(), fontsize=11, pad=8, weight='semibold')
+        fig.suptitle('GP training diagnostics (loss and parity)', fontsize=12, y=0.98)
+        # reserve space so titles/suptitle are not clipped
+        """
         plt.show()
         
     # save average losses to file
@@ -197,7 +230,7 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
             std_test = predictions.stddev
         return mean_test, std_test
 
-    return stats, predict
+    return stats, predict, model, likelihood
 
 def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()
@@ -217,9 +250,11 @@ def train_Ph_model(X_train, y_train, model_constructor, num_iter):
 
     return stats, model
 
+## For GP+Ph model training, not to be confused with train_GP_model above
 def train_GP(X_train, y_train, mean_model, num_iter):
     # set up model and optimizer
     likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=2)
+
     model = MultitaskGPhysModel(X_train, y_train, likelihood, model=mean_model, freeze_model=True)
 
     # Use the adam optimizer
@@ -277,4 +312,4 @@ def train_GP_Ph_model(X_train, y_train, model_constructor, num_iter: int, DNAME,
             std_test = predictions.stddev
         return mean_test, std_test
         
-    return stats, predict
+    return stats, predict, model, model.likelihood

@@ -81,11 +81,8 @@ class PhModel(torch.nn.Module):
         # Clamp latents to prevent extreme values
         latents = torch.clamp(latents, min=-10, max=10)
         
-        r = 40e-9 * torch.exp(torch.clamp(latents[..., [0]], min=-2, max=2))  # More conservative exponential
+        r = 40e-9 * torch.exp(latents[..., [0]])
         eps = torch.sigmoid(latents[..., [1]])
-        # Ensure eps and r are within sensible ranges (but use learned values, not random!)
-        eps = torch.clamp(eps, min=0.5, max=0.8)  # Clamp between 0.5 and 0.8
-        r = torch.clamp(r, min=40e-9, max=65e-9)  # Clamp between 40e-9 and 65e-9
 
         # If inputs are normalized, denormalize Zero_eps_thickness (feature index 3)
         if bool(self.config.get("normalize", False)):
@@ -93,14 +90,11 @@ class PhModel(torch.nn.Module):
         else:
             zlt = x[..., 3].view(-1, 1)
         # Prevent division by zero in L calculation
-        eps_safe = torch.clamp(eps, max=0.99)  # Ensure 1-eps > 0.01
-        L = zlt / (1 - eps_safe)
+        L = zlt / (1 - eps)
         
-        K_dl_factor = torch.exp(torch.clamp(latents[..., [2]], min=-10, max=10))  # Prevent extreme exponentials
-        K_dl_factor = torch.clamp(K_dl_factor, min=1e-6, max=1e6)  # Ensure K_dl_factor is within sensible range
+        K_dl_factor = torch.exp(latents[..., [2]])
         
         thetas = self.softmax(2*latents[..., 3:])
-        thetas = torch.clamp(thetas, min=1e-6, max=1)  # Ensure activations are within sensible range
         # CO activation must not be zero
         theta0 = thetas[...,[0]]
         theta1 = thetas[...,[1]]
