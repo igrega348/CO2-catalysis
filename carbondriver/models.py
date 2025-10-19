@@ -79,7 +79,7 @@ class PhModel(torch.nn.Module):
         latents = self.net(x)
                     
         # Clamp latents to prevent extreme values
-        latents = torch.clamp(latents, min=-10, max=10)
+        #latents = torch.clamp(latents, min=-10, max=10)
         
         r = 40e-9 * torch.exp(latents[..., [0]])
         eps = torch.sigmoid(latents[..., [1]])
@@ -156,7 +156,6 @@ class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
         x_in = x
         if x.dim() == 3 and x.shape[1] == 1:
             x_in = x.squeeze(1) #Ensure correct shape for model input
-            print('X input shape:', x_in.shape)
         mvn = self.model(x_in) #delegate to the underlying ExactGP's forward (i.e., call self.model(x_in))
         return mvn
 
