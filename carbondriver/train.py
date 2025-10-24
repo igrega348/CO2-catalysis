@@ -45,7 +45,7 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         ax[2].set_title('Parity plot: FE (CO, Carbon monoxide)')
 
     # set up model and optimizer
-    num_models = 2
+    num_models = 50
     model = [model_constructor() for _ in range(num_models)]
     params, buffers = stack_module_state(model)
     base_model = copy.deepcopy(model[0])

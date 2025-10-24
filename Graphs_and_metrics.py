@@ -11,8 +11,8 @@ import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_data
 
-NUM_RUNS = 10
-MODELS = ['GP']
+NUM_RUNS = 5
+MODELS = ['MLP']
 OUTPUT_BASE = Path('./active_learning_results')
 OUTPUT_BASE.mkdir(exist_ok=True)
 
@@ -64,41 +64,26 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     # Track results
     chosen_triplets_list = chosen_triplet_ids.copy()
     expected_improvements = [None] * len(chosen_triplet_ids)
-    
+    # Get rows for chosen triplets
+    train_df = df[df['triplet'].isin(chosen_triplet_ids)].copy()
+    # Get rows for withheld triplets
+    withheld_df = df_triplet_means[~df_triplet_means.index.isin(chosen_triplet_ids)].copy()
+
     # Active learning loop
     iteration = 0
-    while len(chosen_triplet_ids) < df_triplet_means.shape[0]:
-        # Get rows for chosen triplets
-        chosen_mask = df['triplet'].isin(chosen_triplet_ids)
-        chosen_df = df[chosen_mask].copy()
-        chosen_df = chosen_df.drop(columns=['triplet'])
-        
-        # Get rows for withheld triplets
-        withheld_triplet_ids = [t for t in df_triplet_means.index 
-                                if t not in chosen_triplet_ids]
-        withheld_mask = df['triplet'].isin(withheld_triplet_ids)
-        withheld_df = df[withheld_mask].copy()
-        withheld_df_triplet_col = withheld_df['triplet'].copy()
-        withheld_df = withheld_df.drop(columns=['triplet'])
-        
+    while len(withheld_df) > 0:
         # Evaluate acquisition function
-        try:
-            best_ei, best_row_idx = gde.step_within_data(chosen_df, withheld_df)
-        except Exception as e:
-            print(f"Error in {model_name} run {run_idx} at iteration {iteration}: {e}")
-            break
+        best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
+        print(best_row_idx)
+        best_triplet = withheld_df.iloc[int(best_row_idx)]
+        print(best_ei)
+        train_df = df[df['triplet'] == best_triplet.name]
+        withheld_df = withheld_df.drop(index=best_triplet.name)
         
-        # Extract best triplet
-        best_row_idx_int = int(best_row_idx.item()) if hasattr(best_row_idx, 'item') else int(best_row_idx)
-        next_triplet_id = int(withheld_df_triplet_col.iloc[best_row_idx_int])
-        
-        chosen_triplet_ids.append(next_triplet_id)
-        chosen_triplets_list.append(next_triplet_id)
-        ei_val = float(best_ei.item()) if hasattr(best_ei, 'item') else float(best_ei)
-        expected_improvements.append(ei_val)
-        
+        expected_improvements.append(best_ei)
+        chosen_triplets_list.append(best_triplet.name)
         iteration += 1
-    
+
     # Save results
     results_df = pd.DataFrame({
         'chosen_triplets': chosen_triplets_list,
@@ -150,12 +135,10 @@ if __name__ == '__main__':
         print(f"Running {model} experiments...")
         
         for run_idx in range(NUM_RUNS):
-            try:
-                run_active_learning_experiment(model, run_idx)
-                if (run_idx + 1) % 10 == 0:
-                    print(f"  {model}: Completed {run_idx + 1}/{NUM_RUNS} runs")
-            except Exception as e:
-                print(f"  {model}: Failed run {run_idx}: {e}")
+            run_active_learning_experiment(model, run_idx)
+            if (run_idx + 1) % 10 == 0:
+                print(f"  {model}: Completed {run_idx + 1}/{NUM_RUNS} runs")
+
     
     print("\nExperiments completed! Generating plots...")
     
