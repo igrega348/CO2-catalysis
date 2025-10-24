@@ -12,3 +12,6 @@ authors = [
 ]
 readme = "README.md"
 license-files = ["LICENSE.txt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["carbondriver"]

@@ -6,3 +6,5 @@ seaborn
 torch
 gpytorch
 botorch
+rich
+openpyxl
