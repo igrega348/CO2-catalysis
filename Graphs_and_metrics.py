@@ -11,7 +11,7 @@ import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_data
 
-NUM_RUNS = 4
+NUM_RUNS = 5
 MODELS = ['MLP']
 OUTPUT_BASE = Path('./active_learning_results')
 OUTPUT_BASE.mkdir(exist_ok=True)
