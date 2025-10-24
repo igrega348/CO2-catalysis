@@ -74,7 +74,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     while len(withheld_df) > 0:
         # Evaluate acquisition function
         best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
-        print(best_row_idx)
+        #print(best_row_idx)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
         print(best_ei)
         train_df = df[df['triplet'] == best_triplet.name]
@@ -217,8 +217,11 @@ if __name__ == '__main__':
             ].cummax().values
             
             # Find step where cummax FE exceeds 0.245
-            step_to_max = chosen_df.loc[chosen_df['cummax FE'] > 0.245, 'index'].min()
-            if pd.notna(step_to_max):
+            filtered = chosen_df[chosen_df['cummax FE'] > 0.245]
+            if not filtered.empty:
+                # First step where threshold was crossed
+                step_to_max = filtered['step'].iloc[0]
+                # Record steps to finish
                 steps_to_finish.append(step_to_max)
         
         if steps_to_finish:
