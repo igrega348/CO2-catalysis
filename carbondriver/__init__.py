@@ -120,8 +120,8 @@ class GDEOptimizer():
             if self.config['normalize']:
                 X, y, self._means, self._stds, _ = normalize_df_torch(self.df)
                 # zero-eps stats for PhModel
-                mu = float(means['Zero_eps_thickness'])
-                sigma = float(stds['Zero_eps_thickness'])
+                mu = float(self._means['Zero_eps_thickness'])
+                sigma = float(self._stds['Zero_eps_thickness'])
             else:
                 X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
                 X = torch.tensor(X, dtype=torch.float32)
@@ -145,8 +145,8 @@ class GDEOptimizer():
                 
                 if self.model == PhModel:
                     # Pass Zero_eps_thickness stats so model can denormalize that feature
-                    mu = float(means['Zero_eps_thickness'])
-                    sigma = float(stds['Zero_eps_thickness'])
+                    mu = float(self._means['Zero_eps_thickness'])
+                    sigma = float(self._stds['Zero_eps_thickness'])
                     model_factory = lambda: PhModel(
                         zlt_mu=mu,
                         zlt_sigma=sigma,
@@ -397,6 +397,7 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
+        #print(scores)
         self.i += 1
 
         # Determine index of target for selection
