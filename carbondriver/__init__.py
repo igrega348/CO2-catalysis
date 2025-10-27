@@ -1,7 +1,7 @@
 import gpytorch
 from .models import PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
-from .loaders import load_data, normalize_df_torch, feature_stats
+from .loaders import normalize_df_torch, feature_stats
 from .config import default_config
 import pandas as pd
 import torch
@@ -18,7 +18,7 @@ class GDEOptimizer():
     Class to optimize gas diffusion electrodes experimental parameters based with Bayesian optimization using various models.
     """
     
-    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None):
+    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None, input_labels=None, output_labels=None):
         """
         Initialize the optimizer with the specified model and acquisition function.
 
@@ -61,6 +61,19 @@ class GDEOptimizer():
         self.df = pd.DataFrame()
 
         self._bounds = bounds
+
+        if input_labels is None:
+            self.input_labels = ['AgCu Ratio',  'Naf vol (ul)',  'Sust vol (ul)',  'Zero_eps_thickness',  'Catalyst mass loading']
+        else:
+            # If input_labels are provided, use them
+            self.input_labels = input_labels
+
+        if output_labels is None:
+            self.output_labels = ['FE (Eth)', 'FE (CO)']
+        else:
+            # If output_labels are provided, use them
+            self.output_labels = output_labels
+
         # Stats for normalization of feature columns (set in get_predictor when normalize=True)
         self._means = None  # torch.Tensor of shape (d,)
         self._stds = None   # torch.Tensor of shape (d,)
@@ -71,8 +84,8 @@ class GDEOptimizer():
         Get the bounds for the optimization based on the data if not specified in the declaration.
         """
         if self._bounds is None:
-            bds_max = self.df.iloc[:, :-2].values.max(axis=0)
-            bds_min = self.df.iloc[:, :-2].values.min(axis=0)
+            bds_max = self.df.loc[:, self.input_labels].values.max(axis=0)
+            bds_min = self.df.loc[:, self.input_labels].values.min(axis=0)
             raw_bounds = torch.tensor([bds_min, bds_max], dtype=torch.float32)
             # Debug: show computed raw bounds
             #print(f"[bounds] raw min: {raw_bounds[0].tolist()} raw max: {raw_bounds[1].tolist()}")
@@ -101,10 +114,10 @@ class GDEOptimizer():
         if self.model == MultitaskGPModel:
             # Normalize if requested
             if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df)
+                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
 
             else:
-                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
 
@@ -118,12 +131,12 @@ class GDEOptimizer():
         elif self.model == MultitaskGPhysModel:
             # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
             if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df)
+                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
                 # zero-eps stats for PhModel
                 mu = float(self._means['Zero_eps_thickness'])
                 sigma = float(self._stds['Zero_eps_thickness'])
             else:
-                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
                 mu = float(self.df['Zero_eps_thickness'].mean())
@@ -141,7 +154,7 @@ class GDEOptimizer():
         else:
             if self.config['normalize']:
                 # Normalize inputs; outputs remain unnormalized
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df)
+                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
                 
                 if self.model == PhModel:
                     # Pass Zero_eps_thickness stats so model can denormalize that feature
@@ -158,7 +171,7 @@ class GDEOptimizer():
                     model_factory = self.model
             elif self.config['normalize'] is False and self.model == PhModel:
                 # No normalization: compute tensors directly but still provide stats for completeness
-                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
                 # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
@@ -172,7 +185,7 @@ class GDEOptimizer():
                 )
             else:
                 # No normalization for MLP model or other cases
-                X, y = self.df.iloc[:, :-2].values, self.df.iloc[:, -2:].values
+                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
                 model_factory = self.model
@@ -299,7 +312,7 @@ class GDEOptimizer():
                 f"Invalid value for config['normalize']: {cfg_norm!r}. Expected True or False (possible typo)."
             )
         if use_norm:
-            means, stds = self._means[:-2], self._stds[:-2]  # feature-only stats
+            means, stds = self._means[self.input_labels], self._stds[self.input_labels]  # feature-only stats
             # Prevent division by zero
             stds_safe = torch.where(stds == 0, torch.tensor(1.0, dtype=torch.float32), stds)
             bounds_norm = torch.stack([
@@ -387,11 +400,11 @@ class GDEOptimizer():
         predictor = self.get_predictor(new_data)
 
         if self.config['normalize']:
-            X, y, _, _, _ = normalize_df_torch(possible_data,means=self._means, stds=self._stds)
+            X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
             # Persist feature stats for consistency when mixing calls
             #print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
         else:
-            X, y = possible_data.iloc[:, :-2].values, possible_data.iloc[:, -2:].values
+            X, y = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
             X = torch.tensor(X, dtype=torch.float32)
             y = torch.tensor(y, dtype=torch.float32)
 

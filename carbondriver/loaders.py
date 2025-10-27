@@ -28,7 +28,7 @@ def load_results_from_folder(folder: Path, plot: bool=False) -> Tuple[pd.DataFra
     df_res_val = df_res[val_cols]
     return df_res_train, df_res_val
 
-def load_data(file: Optional[Path] = None):
+def load_gas_data(file: Optional[Path] = None):
     if file is None:
         file = Path('./Characterization_data.xlsx')
     df = pd.read_excel(file, skiprows=[1], index_col=0)
@@ -57,19 +57,10 @@ def load_data(file: Optional[Path] = None):
         new_df = pd.concat([new_df, df[df['triplet'] == i]])
     new_df.reset_index(drop=True, inplace=True)
     df = new_df
-    df = df.drop(columns=['triplet'])
     # normalize
-    means = df.mean()
-    stds = df.std(ddof=0)
-    df_n = (df - means) / stds
-    X = df_n.iloc[:, :-2].values # inputs normalized
-    y = df.iloc[:, -2:].values # outputs (not normalized)
-    print(X.shape, y.shape)
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    return X, y, means, stds, df
+    return df
 
-def normalize_df_torch(df: pd.DataFrame, means: Optional[pd.DataFrame] = None, stds: Optional[pd.DataFrame] = None):
+def normalize_df_torch(df: pd.DataFrame, input_labels:list, output_labels:list, means: Optional[pd.DataFrame] = None, stds: Optional[pd.DataFrame] = None,):
     if 'triplet' in df.columns:
         df = df.drop(columns=['triplet'])
     # normalize
@@ -78,8 +69,8 @@ def normalize_df_torch(df: pd.DataFrame, means: Optional[pd.DataFrame] = None, s
         means = df.mean()
         stds = df.std(ddof=0)
     df_n = (df - means) / stds
-    X = df_n.iloc[:, :-2].values # inputs normalized
-    y = df.iloc[:, -2:].values # outputs (not normalized)
+    X = df_n.loc[:, input_labels].values # inputs normalized
+    y = df.loc[:, output_labels].values # outputs (not normalized)
     X = torch.tensor(X, dtype=torch.float32)
     y = torch.tensor(y, dtype=torch.float32)
     return X, y, means, stds, df

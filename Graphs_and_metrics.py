@@ -9,18 +9,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from carbondriver import GDEOptimizer
-from carbondriver.loaders import load_data
+from carbondriver.loaders import load_gas_data
 
-NUM_RUNS = 5
-MODELS = ['MLP']
+NUM_RUNS = 1
+MODELS = ['GP']
 OUTPUT_BASE = Path('./active_learning_results')
 OUTPUT_BASE.mkdir(exist_ok=True)
 
 # Load data once
-X, y, means, stds, df = load_data()
-# Add triplet column
-df['triplet'] = df.index // 3
-df_original = df.copy()
+df = load_gas_data()
+
 
 def choose_base_inds_numpy(y: np.ndarray, num_choose: int, strategy: str = 'uniform'):
     """Choose initial triplets uniformly or skewed."""
@@ -38,7 +36,6 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     """Run a single active learning experiment for the given model."""
     
     # Reset df for this run
-    df = df_original.copy()
     df_triplet_means = df.groupby('triplet').mean()
     
     run_dir = OUTPUT_BASE / f'{model_name}_run_{run_idx:03d}'
@@ -51,7 +48,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         quantity="FE (Eth)",
         maximize=True,
         output_dir=str(run_dir),
-        config={'num_iter': 200, 'make_plots': False, 'normalize': True}
+        config={'num_iter': 100, 'make_plots': False, 'normalize': True}
     )
     
     # Choose initial triplets
@@ -76,7 +73,6 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
         #print(best_row_idx)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
-        print(best_ei)
         #This line ensures that we append the new triplet data to train_df, not replacing it
         train_df = pd.concat([train_df, df[df['triplet'] == best_triplet.name]], axis=0)
         withheld_df = withheld_df.drop(index=best_triplet.name)
@@ -108,7 +104,7 @@ def process_runs_mean(model_name: str):
         
         # Read the results
         chosen_df = pd.read_csv(results_file, index_col=0)
-        df_triplet_means = df_original.groupby('triplet').mean()
+        df_triplet_means = df.groupby('triplet').mean()
         
         # Calculate cummax FE for this run
         chosen_df['cummax FE'] = df_triplet_means.loc[
@@ -214,7 +210,7 @@ if __name__ == '__main__':
                 continue
             
             chosen_df = pd.read_csv(results_file, index_col=0)
-            df_triplet_means = df_original.groupby('triplet').mean()
+            df_triplet_means = df.groupby('triplet').mean()
             chosen_df['cummax FE'] = df_triplet_means.loc[
                 chosen_df['chosen_triplets'], 'FE (Eth)'
             ].cummax().values
