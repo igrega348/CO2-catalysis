@@ -15,13 +15,13 @@ def test_import():
 
 def test_gde_optimizer_within_GPPH():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     import pandas as pd
 
     gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -39,7 +39,7 @@ def test_gde_optimizer_within_GPPH():
 
 def test_gde_optimizer_within_GP():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     import pandas as pd
 
@@ -47,7 +47,7 @@ def test_gde_optimizer_within_GP():
 
     gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -65,11 +65,11 @@ def test_gde_optimizer_within_GP():
 
 def test_gde_optimizer_free_GPPh():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -78,11 +78,11 @@ def test_gde_optimizer_free_GPPh():
 
 def test_gde_optimizer_free_GP():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -90,11 +90,11 @@ def test_gde_optimizer_free_GP():
 
 def test_gde_optimizer_free_Ph():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -102,13 +102,13 @@ def test_gde_optimizer_free_Ph():
 
 def test_gde_optimizer_within_Ph():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     import pandas as pd
 
     gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    _, _, _, _, df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -126,13 +126,13 @@ def test_gde_optimizer_within_Ph():
 
 def test_gde_optimizer_within_MLP():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     import pandas as pd
 
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -150,11 +150,11 @@ def test_gde_optimizer_within_MLP():
 
 def test_gde_optimizer_free_MLP():
     from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_data
+    from carbondriver.loaders import load_gas_data
 
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_data(data_path)
+    df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 

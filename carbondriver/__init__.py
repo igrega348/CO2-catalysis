@@ -230,12 +230,11 @@ class GDEOptimizer():
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
             # Select the correct output index (from the last two columns)
-            target_cols = ['FE (Eth)', 'FE (CO)']
             try:
-                target_idx = target_cols.index(self.quantity)
+                target_idx = self.output_labels.index(self.quantity)
             except ValueError:
-                raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
-            
+                raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
+
             # Check if this is a GP model (BoTorchGP wrapper) or ensemble model
             if hasattr(predictor, 'model') and hasattr(predictor.model, 'likelihood'):
                 # This is a GP model - use posterior transform
@@ -291,89 +290,35 @@ class GDEOptimizer():
         #print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
 
         # Select the output column index for the quantity by name from the last two columns
-        target_cols = ['FE (Eth)', 'FE (CO)']
+
         try:
-            target_idx = target_cols.index(self.quantity)
+            target_idx =self.output_labels.index(self.quantity)
         except ValueError:
-            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
+            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
         #print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
 
         # If normalized, convert bounds to normalized space using stored stats
         # Require an explicit boolean in the config to avoid surprising truthiness.
         if 'normalize' not in self.config:
             raise ValueError("config key 'normalize' not specified. Please set config['normalize'] to True or False.")
-        cfg_norm = self.config['normalize']
-        if cfg_norm is True:
-            use_norm = True
-        elif cfg_norm is False:
-            use_norm = False
-        else:
-            raise ValueError(
-                f"Invalid value for config['normalize']: {cfg_norm!r}. Expected True or False (possible typo)."
-            )
-        if use_norm:
+
+        if self.config['normalize'] is True:
             means, stds = self._means[self.input_labels], self._stds[self.input_labels]  # feature-only stats
             # Prevent division by zero
-            stds_safe = torch.where(stds == 0, torch.tensor(1.0, dtype=torch.float32), stds)
+            stds[stds < 1e-10] = 1.0
             bounds_norm = torch.stack([
-                (raw_bounds[0] - means) / stds_safe,
-                (raw_bounds[1] - means) / stds_safe,
+                (raw_bounds[0] - means.values) / stds.values,
+                (raw_bounds[1] - means.values) / stds.values,
             ], dim=0)
             #print(f"[step] normalized bounds min: {bounds_norm[0].tolist()} max: {bounds_norm[1].tolist()}")
-            opt_bounds = bounds_norm
+            opt_bounds = bounds_norm.float()
         else:
             opt_bounds = raw_bounds
 
-        # Wrap AF to be robust to different output shapes and pick the correct target
-        def acq_wrapper(x: torch.Tensor):
-            # x is expected to be (batch, q, d) by botorch
-            vals = AF(x)
-            #try:
-            #    shape_info = tuple(vals.shape)
-            #except Exception:
-            #    shape_info = 'unknown'
-            #print(f"[acq_wrapper] AF input shape: {tuple(x.shape)} | AF output shape: {shape_info}")
-            if isinstance(vals, torch.Tensor):
-                b = x.shape[0]
-                # Case: (batch, ensemble, m)
-                if vals.dim() == 3 and vals.shape[0] == b:
-                    if vals.shape[2] <= target_idx:
-                        raise RuntimeError(f"AF returned shape {tuple(vals.shape)} which has no target index {target_idx}")
-                    vals = vals[:, :, target_idx].mean(dim=1)  # (batch,)
-                    return vals
-                # Case: (batch, m)
-                if vals.dim() == 2 and vals.shape[0] == b:
-                    if vals.shape[1] <= target_idx:
-                        raise RuntimeError(f"AF returned shape {tuple(vals.shape)} which has no column {target_idx}")
-                    vals = vals[:, target_idx]
-                    return vals
-                # Fallback: per-sample evaluation with reduction to scalar
-                out_list = []
-                for i in range(b):
-                    vi = AF(x[i:i+1])
-                    if isinstance(vi, torch.Tensor):
-                        vi = vi.squeeze()
-                        if vi.dim() == 0:
-                            pass  # already scalar
-                        elif vi.dim() == 1:
-                            # Could be (m,), pick target
-                            if vi.numel() <= target_idx:
-                                raise RuntimeError(f"AF per-sample 1D output {tuple(vi.shape)} has no index {target_idx}")
-                            vi = vi[target_idx]
-                        elif vi.dim() == 2:
-                            # Likely (ensemble, m)
-                            if vi.shape[1] <= target_idx:
-                                raise RuntimeError(f"AF per-sample 2D output {tuple(vi.shape)} has no target index {target_idx}")
-                            vi = vi[:, target_idx].mean()
-                        else:
-                            # Collapse all to scalar
-                            vi = vi.view(-1)[0]
-                    out_list.append(vi)
-                return torch.stack(out_list, dim=0)
-            return vals
+        AF_q = lambda x:AF(x)[:,target_idx]
 
         next_experiment, _ = optimize_acqf(
-            acq_function=acq_wrapper,
+            acq_function=AF_q,
             bounds=opt_bounds,
             q=1,
             num_restarts=20,
@@ -381,20 +326,19 @@ class GDEOptimizer():
             options={}, 
         )
 
-        # Denormalize the candidate if optimization was done in normalized space
-        x_candidate = next_experiment
-        if use_norm:
-            x_candidate = next_experiment * stds + means
-            print(f"[step] denormalized candidate: {x_candidate.detach().cpu().numpy().flatten().tolist()}")
+        if self.config['normalize']:
+            # Denormalize the candidate if optimization was done in normalized space
+            x_candidate = next_experiment * stds.values +  means.values
+
         else:
-            print(f"[step] candidate (raw): {x_candidate.detach().cpu().numpy().flatten().tolist()}")
+            x_candidate = next_experiment
 
         self.i += 1
 
         # Evaluate AF at the (normalized) next point for returning EI value
-        ei_val = acq_wrapper(next_experiment)
+        ei_val = AF_q(next_experiment)
 
-        return ei_val, x_candidate.detach().cpu().numpy().flatten()
+        return ei_val, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
 
     def step_within_data(self, new_data, possible_data):
         predictor = self.get_predictor(new_data)
@@ -415,11 +359,10 @@ class GDEOptimizer():
 
         # Determine index of target for selection
         # Determine target index by name (from last two columns)
-        target_cols = ['FE (Eth)', 'FE (CO)']
         try:
-            target_idx = target_cols.index(self.quantity)
+            target_idx = self.output_labels.index(self.quantity)
         except ValueError:
-            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {target_cols}")
+            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
         # Robust selection from AF outputs
         if isinstance(scores, torch.Tensor) and scores.dim() == 2:
             if scores.shape[1] <= target_idx:
