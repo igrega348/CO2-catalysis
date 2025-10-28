@@ -73,14 +73,8 @@ class PhModel(torch.nn.Module):
     def forward(self, x):
         # increment and print persistent forward counter
         self._forward_counter += 1
-        #print(f"\n ---PhModel.forward iteration: {self._forward_counter}---")
-
         # columns of x: AgCu Ratio, Naf vol (ul), Sust vol (ul), Zero_eps_thickness, Catalyst mass loading
         latents = self.net(x)
-                    
-        # Clamp latents to prevent extreme values
-        #latents = torch.clamp(latents, min=-10, max=10)
-        
         r = 40e-9 * torch.exp(latents[..., [0]])
         eps = torch.sigmoid(latents[..., [1]])
 
@@ -91,9 +85,7 @@ class PhModel(torch.nn.Module):
             zlt = x[..., 3].view(-1, 1)
         # Prevent division by zero in L calculation
         L = zlt / (1 - eps)
-        
         K_dl_factor = torch.exp(latents[..., [2]])
-        
         thetas = self.softmax(2*latents[..., 3:])
         # CO activation must not be zero
         theta0 = thetas[...,[0]]
@@ -116,9 +108,6 @@ class PhModel(torch.nn.Module):
             grid_size=1000,
             voltage_bounds=(-1.25,0)
         )
-        #for key, val in solution.items():
-            #print(f"Solution[{key}]: {val}")
-            #print(f" shape={tuple(val.shape)}")
 
         out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
         return out

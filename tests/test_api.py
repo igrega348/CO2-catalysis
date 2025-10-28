@@ -21,7 +21,7 @@ def test_gde_optimizer_within_GPPH():
 
     gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -47,7 +47,7 @@ def test_gde_optimizer_within_GP():
 
     gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
     df_explore = df.loc[31:]
@@ -69,7 +69,7 @@ def test_gde_optimizer_free_GPPh():
 
     gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -82,7 +82,7 @@ def test_gde_optimizer_free_GP():
 
     gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -94,7 +94,7 @@ def test_gde_optimizer_free_Ph():
 
     gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     ei, next_pick = gde.step(df)
 
@@ -108,9 +108,10 @@ def test_gde_optimizer_within_Ph():
 
     gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
 
-    _, _, _, _, df = load_gas_data(data_path)
+    df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
+    breakpoint()
     df_explore = df.loc[31:]
 
     ei, next_pick = gde.step_within_data(df_train, df_explore)
@@ -119,7 +120,7 @@ def test_gde_optimizer_within_Ph():
 
     df_new = df_explore.iloc[int(next_pick)]
     df_explore = df_explore.drop(index=df_new.name)
-
+    breakpoint()
     ei, next_pick = gde.step_within_data(df_new, df_explore)
 
     print("Second pick", ei, int(next_pick))
