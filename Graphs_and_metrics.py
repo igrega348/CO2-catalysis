@@ -12,12 +12,12 @@ from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
 
 NUM_RUNS = 1
-MODELS = ['GP']
-OUTPUT_BASE = Path('./active_learning_results')
+MODELS = ['Ph']
+OUTPUT_BASE = Path('./active_learning_results_Ph')
 OUTPUT_BASE.mkdir(exist_ok=True)
 
 # Load data once
-df = load_gas_data()
+df = load_gas_data("paper/Characterization_data.xlsx")
 
 
 def choose_base_inds_numpy(y: np.ndarray, num_choose: int, strategy: str = 'uniform'):
@@ -48,7 +48,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         quantity="FE (Eth)",
         maximize=True,
         output_dir=str(run_dir),
-        config={'num_iter': 100, 'make_plots': False, 'normalize': True}
+        config={'num_iter': 101, 'make_plots': False, 'normalize': True}
     )
     
     # Choose initial triplets
@@ -68,13 +68,14 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
 
     # Active learning loop
     iteration = 0
+    
     while len(withheld_df) > 0:
         # Evaluate acquisition function
         best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
         #print(best_row_idx)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
         #This line ensures that we append the new triplet data to train_df, not replacing it
-        train_df = pd.concat([train_df, df[df['triplet'] == best_triplet.name]], axis=0)
+        train_df = df[df['triplet'] == best_triplet.name]
         withheld_df = withheld_df.drop(index=best_triplet.name)
         
         expected_improvements.append(best_ei)
