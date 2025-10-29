@@ -99,12 +99,6 @@ class System(torch.nn.Module):
     TOL: float = 1e-36
     MAX_ITER: int = 50
     
-    @staticmethod
-    def safe_exp(x, max_exp=50.0, min_exp=-50.0):
-        """Safe exponential function that prevents overflow/underflow"""
-        x_clamped = torch.clamp(x, min=min_exp, max=max_exp)
-        return torch.exp(x_clamped)
-    
     def __init__(
         self, 
         T: float=298.15, # [K]
@@ -233,7 +227,7 @@ class System(torch.nn.Module):
         d = lambda co2: -2*co2/1000*ice['K1']*ice['K2']
         f_xn = lambda x, a,b,c,d: a*x**3 + b*x**2 + c*x + d
         df_xn = lambda x, a,b,c,d: 3*a*x**2 + 2*b*x + c 
-        xn_to_co2 = lambda xn, co2: self.Hnr*self.dic*self.safe_exp(
+        xn_to_co2 = lambda xn, co2: self.Hnr*self.dic*torch.exp(
             -self.c_k*self.salting_out_exponents['h_K'] -
             self.salting_out_exponents['h_HCO3']*co2*ice['K1']/xn -
             co2*self.salting_out_exponents['h_CO3']*ice['K1']*ice['K2']/xn**2 -
@@ -294,9 +288,7 @@ class System(torch.nn.Module):
         R = self.R
         T = self.T
         Hnr = self.Hnr
-        def Hnr_c(c1, c2):
-            salt_arg = -self.salting_out_exponents['h_OH']*c1 - self.salting_out_exponents['h_CO3']*c2 - self.salting_out_exponents['h_K']*(c1+2*c2)
-            return Hnr*self.safe_exp(salt_arg)
+        Hnr_c = lambda c1, c2: Hnr*torch.exp(-self.salting_out_exponents['h_OH']*c1 - self.salting_out_exponents['h_CO3']*c2 - self.salting_out_exponents['h_K']*(c1+2*c2))
         DCO2 = self.bruggeman(self.diffusion_coefficients['CO2'], eps)
         E_CO = self.electrode_reaction_potentials['E_0_CO']
         co2_equilibrium = self.co2_equilibrium
@@ -308,28 +300,18 @@ class System(torch.nn.Module):
         overpotential_CO = phi_ext - E_CO
         overpotential_C2H4 = phi_ext - self.electrode_reaction_potentials['E_0_C2H4']
         M = lambda k: torch.sqrt(k*L**2/DCO2)
-        # safe M/tanh(M) to avoid 0/0 when M -> 0. Use analytic limit = 1 for small M.
-        def safe_M_over_tanh(M_val: torch.Tensor, thresh: float = 1e-6):
-            # M_val can be tensor; for small |M| use limit 1.0
-            small = torch.abs(M_val) < thresh
-            tanh_M = torch.tanh(M_val)
-            # avoid dividing by extremely small tanh values
-            safe_tanh = torch.where(torch.abs(tanh_M) < thresh, torch.sign(tanh_M) * torch.tensor(thresh, device=tanh_M.device, dtype=tanh_M.dtype), tanh_M)
-            safe_div = M_val / safe_tanh
-            return torch.where(small, torch.ones_like(M_val), safe_div)
 
         # solve without equilibrium reactions
-        bv_arg_CO = -overpotential_CO * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_CO']
-        bv_arg_C2H4 = -overpotential_C2H4 * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_C2H4']
-        k0_CO = A/(2*F) * self.electrode_reaction_kinetics['i_0_CO'] * thetas['CO']/self.chemical_reaction_rates['c_ref'] * self.safe_exp(bv_arg_CO)
-        k0_C2H4 = A/(6*F) * self.electrode_reaction_kinetics['i_0_C2H4'] * thetas['C2H4']/self.chemical_reaction_rates['c_ref'] * self.safe_exp(bv_arg_C2H4)
+        k0_CO = A/(2*F) * self.electrode_reaction_kinetics['i_0_CO'] * thetas['CO']/self.chemical_reaction_rates['c_ref'] * torch.exp(
+            -overpotential_CO * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_CO'])
+        k0_C2H4 = A/(6*F) * self.electrode_reaction_kinetics['i_0_C2H4'] * thetas['C2H4']/self.chemical_reaction_rates['c_ref'] * torch.exp(
+            -overpotential_C2H4 * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_C2H4'])
         k0 = k0_CO + k0_C2H4
-        eff_0 = 1/(safe_M_over_tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
+        eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
         c00 = Hnr*self.p0*eff_0
 
         # estimating OH- concentration
-        h2_bv_arg = -phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b']
-        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * self.safe_exp(h2_bv_arg) # phi_ext is with respect to SHE
+        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b']) # phi_ext is with respect to SHE
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c00
         c10 = OH_neg+(
             self.flow_channel_characteristics['K_L_OH']*OH_neg - 
@@ -344,7 +326,7 @@ class System(torch.nn.Module):
 
         # update CO2 concentration 
         k1 = k0 + eps*self.chemical_reaction_rates['k1f']*c10
-        eff_1 = 1/(safe_M_over_tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
+        eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
         c01 = eff_1*self.p0*Hnr
         # update OH- concentration
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c01
@@ -359,22 +341,11 @@ class System(torch.nn.Module):
         A_1 = (
             2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c11
         ) / (2*self.flow_channel_characteristics['K_L_CO3'])
-        salt_exp_arg = -c11*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K'])
-        B_2 = L*2*k0*c01 / (2*self.flow_channel_characteristics['K_L_CO3']) * self.safe_exp(salt_exp_arg)
+        B_2 = L*2*k0*c01 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c11*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
         C = self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
-        C = torch.clamp(C, min=1e-10)  # Prevent division by zero
-        
-        # Safe computation of complex logarithmic expression
-        inner_exp_arg = -A_1*C
-        inner_exp = self.safe_exp(inner_exp_arg)
-        sqrt_arg = 1+B_2*C*inner_exp
-        sqrt_arg = torch.clamp(sqrt_arg, min=1e-10)  # Ensure positive argument
-        inner_log_arg = 1+torch.log(torch.sqrt(sqrt_arg))
-        inner_log_arg = torch.clamp(inner_log_arg, min=1e-10)  # Ensure positive argument
-        
-        outer_log_arg = 1+(B_2*C * inner_exp) / inner_log_arg
-        outer_log_arg = torch.clamp(outer_log_arg, min=1e-10)  # Ensure positive argument
-        c20 = A_1 + torch.log(outer_log_arg) / C
+        c20 = A_1+torch.log(
+            1+(B_2*C * torch.exp(-A_1*C)) / (1+torch.log(torch.sqrt(1+B_2*C*torch.exp(-A_1*C))))
+            ) / C
         # salting out corrected CO2 concentration
         c02 = eff_1*self.p0*Hnr_c(c11,c20)
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c02
@@ -388,29 +359,27 @@ class System(torch.nn.Module):
         )
 
         k2 = k0 + eps*self.chemical_reaction_rates['k1f']*c12
-        M_k2 = torch.sqrt(k2*L**2/DCO2)
-        eff_2 = 1/(safe_M_over_tanh(M_k2) + k2*L/gdl_mass_transfer_coeff)
+        eff_2 = 1/(
+            torch.sqrt(
+                k2*L**2/DCO2
+            ) / torch.tanh(torch.sqrt(
+                k2*L**2/DCO2
+            )) + k2*L/gdl_mass_transfer_coeff
+        )
         A_1_1 = (
             2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
         ) / (2*self.flow_channel_characteristics['K_L_CO3'])
         # formula for this B2 is different than for the previous B2
-        salt_exp_arg2 = -c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K'])
-        B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * self.safe_exp(salt_exp_arg2)
-        
-        C2 = self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
-        C2 = torch.clamp(C2, min=1e-10)  # Prevent division by zero
-        
-        # Safe computation of second complex logarithmic expression
-        inner_exp_arg2 = -A_1_1*C2
-        inner_exp2 = self.safe_exp(inner_exp_arg2)
-        sqrt_arg2 = 1+B_2_1*C2*inner_exp2
-        sqrt_arg2 = torch.clamp(sqrt_arg2, min=1e-10)  # Ensure positive argument
-        inner_log_arg2 = 1+torch.log(torch.sqrt(sqrt_arg2))
-        inner_log_arg2 = torch.clamp(inner_log_arg2, min=1e-10)  # Ensure positive argument
-        
-        outer_log_arg2 = 1+(B_2_1*C2 * inner_exp2) / inner_log_arg2
-        outer_log_arg2 = torch.clamp(outer_log_arg2, min=1e-10)  # Ensure positive argument
-        c21 = A_1_1 + torch.log(outer_log_arg2) / C2
+        B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
+        c21 = A_1_1+torch.log(
+            1+(
+                B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']) * torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))
+                ) / (
+                    1+torch.log(torch.sqrt(1+B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K'])*torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))))
+                    )
+            ) / (
+            self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
+        )
         c21 = torch.maximum(c21, torch.zeros_like(c21))
         c03 = self.p0*Hnr_c(c12, c21)*eff_2
         potential_vs_rhe = phi_ext - R*T/F*torch.log(c12/OH_neg)
@@ -424,11 +393,12 @@ class System(torch.nn.Module):
         fe_c2h4 = c2h4_current_density / current_density
         parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
         electrode = L*k0*c03
-        # use safe M/tanh for gdl flux term to avoid 0/0
-        M_k2_for_flux = torch.sqrt(k2*L**2/DCO2)
-        safe_tanh_flux = torch.where(torch.abs(torch.tanh(M_k2_for_flux)) < 1e-8, torch.sign(torch.tanh(M_k2_for_flux)) * torch.full_like(M_k2_for_flux, 1e-8), torch.tanh(M_k2_for_flux))
         gdl_flux = gdl_mass_transfer_coeff*(
-            Hnr_c(c12,c21)*self.p0 - c03 * (M_k2_for_flux / safe_tanh_flux)
+            Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(
+                k2*L**2/DCO2
+            ) / torch.tanh(
+                torch.sqrt(k2*L**2/DCO2)
+            )
         )
         hco3 = torch.minimum(
             HCO3_neg+Hnr_c(c12,c21)*self.p0,
@@ -497,49 +467,17 @@ class System(torch.nn.Module):
         I = solution['current_density'].detach()
 
         i_target = i_target.reshape(-1,1)
-        # Normalize current density tensor to 2D [batch, grid] for interpolation
-        # (common case initial shape: [1, batch, grid])
-        if I.dim() == 3 and I.shape[0] == 1:
-            I_boundaries = I.squeeze(0)
-        elif I.dim() == 2:
-            I_boundaries = I
-        else:
-            # Generic fallback: merge all trailing dims into grid dimension
-            I_boundaries = I.view(I.shape[0], -1)
+        idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
 
-        # Row-wise searchsorted (torch.searchsorted currently expects 1D boundaries)
-        idx_list = []
-        for b in range(I_boundaries.shape[0]):
-            boundaries_row = I_boundaries[b]
-            target_row = i_target[b].squeeze() if i_target[b].dim() > 0 else i_target[b]
-            idx_b = torch.searchsorted(boundaries_row, target_row, side='right') - 1
-            idx_list.append(idx_b)
-        idx = torch.stack(idx_list, dim=0).view(i_target.shape)
-
-        # Clamp indices to valid interpolation range
-        idx = torch.clamp(idx, min=0, max=I_boundaries.shape[1]-2)
-        curr_left = I_boundaries.gather(dim=1, index=idx)
-        curr_right = I_boundaries.gather(dim=1, index=idx+1)
-        denom = curr_right - curr_left
-        epsilon = 1e-10  # Small value to avoid division by zero
-        denom_safe = torch.where(torch.abs(denom) < epsilon, torch.full_like(denom, fill_value=epsilon), other=denom)
-        p = (i_target - curr_left) / denom_safe
+        curr_left = I.gather(dim=1, index=idx)
+        curr_right = I.gather(dim=1, index=idx+1)
+        p = (i_target - curr_left) / (curr_right - curr_left)
 
         out = {}
         for k, v in solution.items():
-            if v.shape[0] == 1:
-                v = v * torch.ones_like(eps)
-            # Squeeze to 2D [batch, grid]
-            if v.dim() == 3 and v.shape[0] == 1:
-                v_interp = v.squeeze(0)
-            elif v.dim() == 2:
-                v_interp = v
-            else:
-                v_interp = v.view(v.shape[0], -1)
-                print('Weird shapes for v, flattened to 1-D.', v.shape, '->', v_interp.shape)
-            # Clamp indices for this tensor (grid length may differ theoretically)
-            idx_clamped = torch.clamp(idx, min=0, max=v_interp.shape[1]-2)
-            out[k] = (1-p)*v_interp.gather(dim=1, index=idx_clamped) + p*v_interp.gather(dim=1, index=idx_clamped+1)
+            if v.shape[0]==1:
+                v = v*torch.ones_like(eps)
+            out[k] = (1-p)*v.gather(dim=1, index=idx) + p*v.gather(dim=1, index=idx+1)
             
         if return_init_residual: # return the distance to closest original current density
             return out, torch.minimum(torch.abs(i_target - curr_left), torch.abs(i_target - curr_right))
