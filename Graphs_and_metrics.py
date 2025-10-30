@@ -11,9 +11,9 @@ import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
 
-NUM_RUNS = 1
-MODELS = ['Ph']
-OUTPUT_BASE = Path('./active_learning_results_Ph')
+NUM_RUNS = 2
+MODELS = ['GP']
+OUTPUT_BASE = Path('./active_learning_results_GP')
 OUTPUT_BASE.mkdir(exist_ok=True)
 
 # Load data once
@@ -78,7 +78,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         train_df = df[df['triplet'] == best_triplet.name]
         withheld_df = withheld_df.drop(index=best_triplet.name)
         
-        expected_improvements.append(best_ei)
+        expected_improvements.append(float(best_ei))
         chosen_triplets_list.append(best_triplet.name)
         iteration += 1
 
