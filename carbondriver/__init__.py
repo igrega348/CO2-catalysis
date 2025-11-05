@@ -98,17 +98,19 @@ class GDEOptimizer():
         Load pretrained model.
         '''
         raise NotImplementedError
-
-    def get_predictor(self, new_data):
-        '''
-        Train and return the new predictor based on the new data.
-        '''
-
+    
+    def update_data(self, new_data):
+        
+                
         if isinstance(new_data, pd.Series):
             new_data = new_data.to_frame().T
         
         self.df = pd.concat([self.df, new_data], axis=0)
 
+    def get_predictor(self):
+        '''
+        Train and return the new predictor based on the new data.
+        '''
         # Special handling for GP and GP+Ph models: these use gpytorch training functions
         # (they are not compatible with the ensemble training pipeline used for MLP/Ph).
         if self.model == MultitaskGPModel:
@@ -270,13 +272,8 @@ class GDEOptimizer():
 
         :return: The acquisition function value and the next experiment parameters
         """
-
-        #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
-
-        predictor = self.get_predictor(new_data)
-
-        AF = self._get_acquisition_function(predictor)
-
+        self.update_data(new_data)
+        
         # Determine raw bounds (always in original feature scale)
         # Use the property-created tensor by default. If the caller supplied `bounds`,
         # require that it already be a torch.Tensor.
@@ -287,7 +284,17 @@ class GDEOptimizer():
                 "Convert lists/arrays with torch.as_tensor(..., dtype=torch.float32) before calling step."
             )
         assert raw_bounds.shape[0] == 2, "Bounds should have shape (2, d)"
-        #print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
+        
+        #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
+        try:
+            predictor = self.get_predictor()
+        except torch._C._LinAlgError:
+            print("LinAlgError during ensemble training. System may be underdetermined. Returning a random candidate.")
+            x_candidate = torch.randn(len(self.input_labels)) * (raw_bounds[1,:] - raw_bounds[0,:]) + raw_bounds[0,:]
+            
+            return torch.nan, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
+
+        AF = self._get_acquisition_function(predictor)
 
         # Select the output column index for the quantity by name from the last two columns
 
@@ -341,8 +348,15 @@ class GDEOptimizer():
         return ei_val, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
 
     def step_within_data(self, new_data, possible_data):
-        predictor = self.get_predictor(new_data)
-
+        
+        self.update_data(new_data)
+        
+        try:
+            predictor = self.get_predictor()
+        except torch._C._LinAlgError:
+            print("LinAlgError during ensemble training. System may be underdetermined.")
+            return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+            
         if self.config['normalize']:
             X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
             # Persist feature stats for consistency when mixing calls
