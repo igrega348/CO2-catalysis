@@ -291,8 +291,19 @@ class GDEOptimizer():
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined. Returning a random candidate.")
             x_candidate = torch.randn(len(self.input_labels)) * (raw_bounds[1,:] - raw_bounds[0,:]) + raw_bounds[0,:]
-            
+
             return torch.nan, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
+        except RuntimeError as e:
+            # Handle gpytorch ExactGP runtime error when model is called with inputs
+            # that don't exactly match the stored training inputs (raised in debug mode).
+            msg = str(e)
+            if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
+                print("RuntimeError during GP training (likely mismatched training inputs). Treating as underdetermined and returning a random candidate.")
+                x_candidate = torch.randn(len(self.input_labels)) * (raw_bounds[1,:] - raw_bounds[0,:]) + raw_bounds[0,:]
+                return torch.nan, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
+            else:
+                # Unknown runtime error: re-raise so we don't silently swallow unrelated failures
+                raise
 
         AF = self._get_acquisition_function(predictor)
 
@@ -356,6 +367,13 @@ class GDEOptimizer():
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined.")
             return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+        except RuntimeError as e:
+            msg = str(e)
+            if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
+                print("RuntimeError during GP training. Treating as underdetermined.")
+                return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+            else:
+                raise
             
         if self.config['normalize']:
             X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)

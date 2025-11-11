@@ -156,6 +156,7 @@ cython_debug/
 
 # CSV files
 stats_*.csv
+chosen_triplets.csv
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
