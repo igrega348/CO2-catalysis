@@ -3,6 +3,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import torch
+from torch.nn.parameter import UninitializedParameter
 from torch.func import functional_call
 from torch import vmap
 import copy
@@ -47,11 +48,20 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
     # set up model and optimizer
     num_models = 50
     model = [model_constructor() for _ in range(num_models)]
+
+    # Initialize LazyModules (e.g. LazyLinear) using a dummy batch so all parameters are materialized
+    dummy_x = X_train[:1]
+    for m in model:
+        if any(isinstance(p, UninitializedParameter) for p in m.parameters()):
+            with torch.no_grad():
+                _ = m(dummy_x)
+
     params, buffers = stack_module_state(model)
     base_model = copy.deepcopy(model[0])
     base_model = base_model.to('meta')
     def fmodel(params, buffers, x):
         return functional_call(base_model, (params, buffers), (x,))
+
 
     optimizer = torch.optim.Adam(params.values(), lr=0.001)
     variance_scaler = torch.tensor(1.0, requires_grad=True)
