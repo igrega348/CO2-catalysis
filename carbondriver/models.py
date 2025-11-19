@@ -114,10 +114,14 @@ class PhModel(torch.nn.Module):
 
 
 class MLPModel(torch.nn.Module):
-    def __init__(self, dropout: float = 0.1, ldim: int = 64):
+    def __init__(self, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64):
+        """
+        n_outputs: number of output targets (e.g. 1 for single objective, 2 for FE(Eth)/FE(CO), etc.)
+        """
         super().__init__()
         self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(5, ldim),
+            # Input dimension is inferred at first forward pass
+            torch.nn.LazyLinear(ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
             torch.nn.Linear(ldim, ldim),
@@ -126,12 +130,13 @@ class MLPModel(torch.nn.Module):
             torch.nn.Linear(ldim, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
-            torch.nn.Linear(ldim, 2),
-            torch.nn.Sigmoid()
+            torch.nn.Linear(ldim, n_outputs),
+            torch.nn.Sigmoid(),
         )
 
     def forward(self, x):
         return self.mlp(x)
+
 
 
 class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function

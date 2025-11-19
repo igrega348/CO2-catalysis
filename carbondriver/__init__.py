@@ -100,13 +100,13 @@ class GDEOptimizer():
         raise NotImplementedError
 
     def get_predictor(self, new_data):
-        '''
+        """
         Train and return the new predictor based on the new data.
-        '''
+        """
 
         if isinstance(new_data, pd.Series):
             new_data = new_data.to_frame().T
-        
+
         self.df = pd.concat([self.df, new_data], axis=0)
 
         # Special handling for GP and GP+Ph models: these use gpytorch training functions
@@ -114,39 +114,67 @@ class GDEOptimizer():
         if self.model == MultitaskGPModel:
             # Normalize if requested
             if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
-
+                X, y, self._means, self._stds, _ = normalize_df_torch(
+                    self.df, self.input_labels, self.output_labels
+                )
             else:
-                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
+                X, y = (
+                    self.df.loc[:, self.input_labels].values,
+                    self.df.loc[:, self.output_labels].values,
+                )
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
 
             # Train GP and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
-            
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP (gp_model, likelihood)
+            _, _, gp_model, likelihood = train_GP_model(
+                X,
+                y,
+                num_iter=self.config["num_iter"],
+                DNAME=self.output_dir,
+                i=self.i,
+                plot=self.config["make_plots"],
+            )
 
+            # Return BoTorch-compatible wrapper
+            return BoTorchGP(gp_model, likelihood)
 
         elif self.model == MultitaskGPhysModel:
             # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
             if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
+                X, y, self._means, self._stds, _ = normalize_df_torch(
+                    self.df, self.input_labels, self.output_labels
+                )
                 # zero-eps stats for PhModel
                 mu = float(self._means['Zero_eps_thickness'])
                 sigma = float(self._stds['Zero_eps_thickness'])
             else:
-                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
+                X, y = (
+                    self.df.loc[:, self.input_labels].values,
+                    self.df.loc[:, self.output_labels].values,
+                )
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
                 mu = float(self.df['Zero_eps_thickness'].mean())
                 sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
 
-            ph_model_constructor = lambda: PhModel(zlt_mu=mu, zlt_sigma=sigma, current_target=233, config=self.config)
+            ph_model_constructor = lambda: PhModel(
+                zlt_mu=mu,
+                zlt_sigma=sigma,
+                current_target=233,
+                config=self.config,
+            )
 
             # Train GP+Ph and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
-            
+            _, _, gp_model, likelihood = train_GP_Ph_model(
+                X,
+                y,
+                ph_model_constructor,
+                num_iter=self.config["num_iter"],
+                DNAME=self.output_dir,
+                i=self.i,
+                plot=self.config["make_plots"],
+            )
+
             # Return BoTorch-compatible wrapper
             return BoTorchGP(gp_model, likelihood)
 
@@ -154,8 +182,10 @@ class GDEOptimizer():
         else:
             if self.config['normalize']:
                 # Normalize inputs; outputs remain unnormalized
-                X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
-                
+                X, y, self._means, self._stds, _ = normalize_df_torch(
+                    self.df, self.input_labels, self.output_labels
+                )
+
                 if self.model == PhModel:
                     # Pass Zero_eps_thickness stats so model can denormalize that feature
                     mu = float(self._means['Zero_eps_thickness'])
@@ -166,12 +196,22 @@ class GDEOptimizer():
                         current_target=233,
                         config=self.config,
                     )
+
+                elif self.model == MLPModel:
+                    # NEW: MLP output dimension matches number of output labels
+                    n_out = len(self.output_labels)
+                    model_factory = lambda: MLPModel(n_outputs=n_out)
+
                 else:
-                    # MLP model with normalization
+                    # MLP is not used here; fall back to given constructor
                     model_factory = self.model
+
             elif self.config['normalize'] is False and self.model == PhModel:
                 # No normalization: compute tensors directly but still provide stats for completeness
-                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
+                X, y = (
+                    self.df.loc[:, self.input_labels].values,
+                    self.df.loc[:, self.output_labels].values,
+                )
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
                 # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
@@ -183,20 +223,38 @@ class GDEOptimizer():
                     current_target=233,
                     config=self.config,
                 )
+
             else:
                 # No normalization for MLP model or other cases
-                X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
+                X, y = (
+                    self.df.loc[:, self.input_labels].values,
+                    self.df.loc[:, self.output_labels].values,
+                )
                 X = torch.tensor(X, dtype=torch.float32)
                 y = torch.tensor(y, dtype=torch.float32)
-                model_factory = self.model
 
-            _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+                if self.model == MLPModel:
+                    # NEW: MLP with dynamic number of outputs
+                    n_out = len(self.output_labels)
+                    model_factory = lambda: MLPModel(n_outputs=n_out)
+                else:
+                    model_factory = self.model
+
+            _, model = train_model_ens(
+                X,
+                y,
+                model_factory,
+                DNAME=self.output_dir,
+                i=self.i,
+                num_iter=self.config["num_iter"],
+                plot=self.config["make_plots"],
+            )
 
             class Predictor(EnsembleModel):
                 def __init__(self):
                     super().__init__()
                     self._num_outputs = 1
-            
+
                 def forward(self, X: torch.Tensor):
                     # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
                     if X.dim() == 3 and X.shape[1] == 1:
@@ -211,7 +269,7 @@ class GDEOptimizer():
                     # Handle different output dimensions
                     if model_output.dim() == 3:
                         # Output is [ensemble, batch, features] -> [batch, ensemble, features]
-                        result = model_output.permute((1, 0, 2)).unsqueeze(2) 
+                        result = model_output.permute((1, 0, 2)).unsqueeze(2)
                     elif model_output.dim() == 4:
                         # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
                         result = model_output.permute((2, 0, 1, 3))
@@ -315,7 +373,23 @@ class GDEOptimizer():
         else:
             opt_bounds = raw_bounds
 
-        AF_q = lambda x:AF(x)[:,target_idx]
+        def AF_q(x):
+            vals = AF(x)
+            # vals can be:
+            #  - 1D: (batch,) already scalar per point
+            #  - 2D: (batch, m) for m outputs
+            if vals.dim() == 1:
+                return vals
+            if vals.dim() == 2:
+                if vals.size(1) == 1:
+                    return vals.squeeze(1)
+                if target_idx >= vals.size(1):
+                    raise RuntimeError(
+                        f"Acquisition returned {vals.size(1)} outputs but target_idx={target_idx}"
+                    )
+                return vals[:, target_idx]
+            # Fallback: flatten all but batch dim and take first column
+            return vals.view(vals.shape[0], -1)[:, 0]
 
         next_experiment, _ = optimize_acqf(
             acq_function=AF_q,
