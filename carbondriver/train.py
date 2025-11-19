@@ -11,7 +11,7 @@ import gpytorch
 import matplotlib.pyplot as plt
 from math import ceil
 from rich.progress import track
-from carbondriver.models import MultitaskGPhysModel, MultitaskGPModel
+from carbondriver.models import EnsPredictor, MultitaskGPhysModel, MultitaskGPModel, BoTorchGP
 
 
 
@@ -138,7 +138,7 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         y_diff = y - y.mean(dim=0, keepdim=True)
         return y.mean(dim=0) + y_diff * variance_scaler.sqrt()
 
-    return stats, scaled_model
+    return stats, EnsPredictor(scaled_model)
 
 def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, plot=False):
     DNAME = Path(DNAME)
@@ -155,7 +155,7 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
 
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-
+    #print(X_train.shape)
     model.train()
     likelihood.train()
 
@@ -230,7 +230,7 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
             std_test = predictions.stddev
         return mean_test, std_test
 
-    return stats, predict, model, likelihood
+    return stats, predict, BoTorchGP(model), likelihood
 
 def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()

@@ -1,5 +1,5 @@
 import gpytorch
-from .models import PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
+from .models import EnsPredictor, PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
 from .loaders import normalize_df_torch, feature_stats
 from .config import default_config
@@ -11,7 +11,6 @@ from botorch.acquisition.analytic import LogExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
-from botorch.models.ensemble import EnsembleModel
 
 class GDEOptimizer():
     """
@@ -124,10 +123,8 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
 
             # Train GP and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            _, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
             
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP (gp_model, likelihood)
 
 
         elif self.model == MultitaskGPhysModel:
@@ -147,10 +144,8 @@ class GDEOptimizer():
             ph_model_constructor = lambda: PhModel(zlt_mu=mu, zlt_sigma=sigma, current_target=233, config=self.config)
 
             # Train GP+Ph and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            _, _, model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
             
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP(gp_model, likelihood)
 
         # Handle ensemble models (MLP and Ph)
         else:
@@ -194,36 +189,7 @@ class GDEOptimizer():
 
             _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
-            class Predictor(EnsembleModel):
-                def __init__(self):
-                    super().__init__()
-                    self._num_outputs = 1
-            
-                def forward(self, X: torch.Tensor):
-                    # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
-                    if X.dim() == 3 and X.shape[1] == 1:
-                        X_in = X.squeeze(1)  # (batch, d)
-                    elif X.dim() == 2:
-                        X_in = X  # already (batch, d)
-                    else:
-                        # Attempt to reshape conservatively: collapse all but last dim into batch
-                        X_in = X.view(-1, X.shape[-1])
-
-                    model_output = model(X_in)
-                    # Handle different output dimensions
-                    if model_output.dim() == 3:
-                        # Output is [ensemble, batch, features] -> [batch, ensemble, features]
-                        result = model_output.permute((1, 0, 2)).unsqueeze(2) 
-                    elif model_output.dim() == 4:
-                        # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
-                        result = model_output.permute((2, 0, 1, 3))
-                    else:
-                        # Fallback: return as is
-                        result = model_output
-
-                    return result
-
-            return Predictor()
+        return model
 
     def _get_acquisition_function(self, predictor):
         """
@@ -237,28 +203,16 @@ class GDEOptimizer():
             except ValueError:
                 raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
 
-            # Check if this is a GP model (BoTorchGP wrapper) or ensemble model
-            if hasattr(predictor, 'model') and hasattr(predictor.model, 'likelihood'):
-                # This is a GP model - use posterior transform
-                weights = torch.zeros(2, dtype=torch.float32)
-                weights[target_idx] = 1.0
-                post_tf = ScalarizedPosteriorTransform(weights=weights)
-                #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return LogExpectedImprovement(
-                    predictor,
-                    best_f=best_f,
-                    maximize=self.maximize,
-                    posterior_transform=post_tf,
-                )
-            else:
-                # This is an ensemble model - use LogEI without posterior transform
-                # The acq_wrapper will handle target selection
-                #print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return LogExpectedImprovement(
-                    predictor,
-                    best_f=best_f,
-                    maximize=self.maximize,
-                )
+            weights = torch.zeros(2, dtype=torch.float32)
+            weights[target_idx] = 1.0
+            post_tf = ScalarizedPosteriorTransform(weights=weights)
+            #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
+            return LogExpectedImprovement(
+                predictor,
+                best_f=best_f,
+                maximize=self.maximize,
+                posterior_transform=post_tf,
+            )
         else:
             raise ValueError("Unsupported acquisition function.")
     

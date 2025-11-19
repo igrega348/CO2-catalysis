@@ -11,7 +11,7 @@ import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
 
-NUM_RUNS = 2
+NUM_RUNS = 50
 MODELS = ['GP']
 OUTPUT_BASE = Path('./active_learning_results_GP')
 OUTPUT_BASE.mkdir(exist_ok=True)
