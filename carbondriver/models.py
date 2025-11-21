@@ -114,14 +114,14 @@ class PhModel(torch.nn.Module):
 
 
 class MLPModel(torch.nn.Module):
-    def __init__(self, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64):
+    def __init__(self, n_inputs: int, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64):
         """
         n_outputs: number of output targets (e.g. 1 for single objective, 2 for FE(Eth)/FE(CO), etc.)
         """
         super().__init__()
         self.mlp = torch.nn.Sequential(
             # Input dimension is inferred at first forward pass
-            torch.nn.LazyLinear(ldim),
+            torch.nn.Linear(n_inputs, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
             torch.nn.Linear(ldim, ldim),
