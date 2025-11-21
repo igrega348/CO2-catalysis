@@ -198,12 +198,14 @@ class GDEOptimizer():
                     )
 
                 elif self.model == MLPModel:
-                    # NEW: MLP output dimension matches number of output labels
+                    # MLP model with explicit input/output sizes
+                    n_in = len(self.input_labels)
                     n_out = len(self.output_labels)
-                    model_factory = lambda: MLPModel(n_outputs=n_out)
-
+                    model_factory = lambda: MLPModel(
+                        n_inputs=n_in,
+                        n_outputs=n_out,
+                    )
                 else:
-                    # MLP is not used here; fall back to given constructor
                     model_factory = self.model
 
             elif self.config['normalize'] is False and self.model == PhModel:
@@ -234,9 +236,13 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
 
                 if self.model == MLPModel:
-                    # NEW: MLP with dynamic number of outputs
+                    # MLP with explicit input/output sizes
+                    n_in = len(self.input_labels)
                     n_out = len(self.output_labels)
-                    model_factory = lambda: MLPModel(n_outputs=n_out)
+                    model_factory = lambda: MLPModel(
+                        n_inputs=n_in,
+                        n_outputs=n_out,
+                    )
                 else:
                     model_factory = self.model
 
