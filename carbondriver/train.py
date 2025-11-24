@@ -155,7 +155,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
 
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-    #print(X_train.shape)
     model.train()
     likelihood.train()
 
@@ -312,4 +311,4 @@ def train_GP_Ph_model(X_train, y_train, model_constructor, num_iter: int, DNAME,
             std_test = predictions.stddev
         return mean_test, std_test
         
-    return stats, predict, model, model.likelihood
+    return stats, predict, BoTorchGP(model), model.likelihood

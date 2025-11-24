@@ -197,21 +197,10 @@ class GDEOptimizer():
         """
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
-            # Select the correct output index (from the last two columns)
-            try:
-                target_idx = self.output_labels.index(self.quantity)
-            except ValueError:
-                raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
-
-            weights = torch.zeros(2, dtype=torch.float32)
-            weights[target_idx] = 1.0
-            post_tf = ScalarizedPosteriorTransform(weights=weights)
-            #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
             return LogExpectedImprovement(
                 predictor,
                 best_f=best_f,
                 maximize=self.maximize,
-                posterior_transform=post_tf,
             )
         else:
             raise ValueError("Unsupported acquisition function.")
@@ -332,7 +321,6 @@ class GDEOptimizer():
         if self.config['normalize']:
             X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
             # Persist feature stats for consistency when mixing calls
-            #print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
         else:
             X, y = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
             X = torch.tensor(X, dtype=torch.float32)
@@ -340,21 +328,25 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
-        #print(scores)
+        if isinstance(scores, torch.Tensor) and scores.dim() >= 2:
+            # Flatten any extra batch dimensions so rows align with candidates
+            scores = scores.reshape(-1, scores.shape[-1])
+        elif isinstance(scores, torch.Tensor):
+            scores = scores.unsqueeze(0)
+
         self.i += 1
 
-        # Determine index of target for selection
-        # Determine target index by name (from last two columns)
-        try:
-            target_idx = self.output_labels.index(self.quantity)
-        except ValueError:
-            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
+        # Determine target index by name (from the last two columns)
+        target_idx = self.output_labels.index(self.quantity)
         # Robust selection from AF outputs
-        if isinstance(scores, torch.Tensor) and scores.dim() == 2:
+        if isinstance(scores, torch.Tensor):
             if scores.shape[1] <= target_idx:
                 raise RuntimeError(f"AF scores shape {tuple(scores.shape)} has no column {target_idx}")
             target_scores = scores[:, target_idx]
         else:
-            target_scores = scores.squeeze()
-        return target_scores.max(), target_scores.argmax()
+            raise RuntimeError("AF returned non-tensor scores, expected torch.Tensor")
+
+        best_idx = int(target_scores.argmax().item())
+        best_ei = float(target_scores[best_idx].item())
+        return best_ei, best_idx
         

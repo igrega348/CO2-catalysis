@@ -97,7 +97,6 @@ class PhModel(torch.nn.Module):
             'H2b': theta2
         }
         gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
-        #print(f"r: {r}, eps: {eps}, K_dl_factor: {K_dl_factor}, thetas: {thetas}, gdl_mass_transfer_coefficient: {gdl_mass_transfer_coefficient}")
         solution = self.ph_model.solve_current(
             i_target=self.current_target,
             eps=eps,
@@ -136,7 +135,7 @@ class MLPModel(torch.nn.Module):
 class EnsPredictor(EnsembleModel):
     def __init__(self,model_input):
         super().__init__()
-        self._num_outputs = 2
+        self._num_outputs = 1
         self.model_input = model_input
 
     def forward(self, X: torch.Tensor):
@@ -167,10 +166,14 @@ class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
     def __init__(self, model):
         super().__init__()
         self.model = model
-        self._num_outputs = 2
+        self._num_outputs = 1
 
     def forward(self, x):
-        return self.model(x)
+        if x.dim() == 3 and x.shape[1] == 1:
+            X_in = x.squeeze(1)  # (batch, d)
+        elif x.dim() == 2:
+            X_in = x  # already (batch, d)
+        return self.model(X_in)
 
 class MultitaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):

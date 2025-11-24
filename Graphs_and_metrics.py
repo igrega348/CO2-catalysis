@@ -72,7 +72,6 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     while len(withheld_df) > 0:
         # Evaluate acquisition function
         best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
-        #print(best_row_idx)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
         #This line ensures that we append the new triplet data to train_df, not replacing it
         train_df = df[df['triplet'] == best_triplet.name]
