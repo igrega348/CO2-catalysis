@@ -328,10 +328,7 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
-        if isinstance(scores, torch.Tensor) and scores.dim() >= 2:
-            # Flatten any extra batch dimensions so rows align with candidates
-            scores = scores.reshape(-1, scores.shape[-1])
-        elif isinstance(scores, torch.Tensor):
+        if isinstance(scores, torch.Tensor) and scores.dim() == 1:
             scores = scores.unsqueeze(0)
 
         self.i += 1
