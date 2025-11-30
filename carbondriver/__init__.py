@@ -144,7 +144,7 @@ class GDEOptimizer():
             ph_model_constructor = lambda: PhModel(zlt_mu=mu, zlt_sigma=sigma, current_target=233, config=self.config)
 
             # Train GP+Ph and return BoTorch-compatible model
-            _, _, model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            stats, _, model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
             
 
         # Handle ensemble models (MLP and Ph)
