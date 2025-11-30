@@ -11,7 +11,7 @@ import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
 
-NUM_RUNS = 50
+NUM_RUNS = 10
 MODELS = ['GP']
 OUTPUT_BASE = Path('./active_learning_results_GP')
 OUTPUT_BASE.mkdir(exist_ok=True)
@@ -61,6 +61,8 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     # Track results
     chosen_triplets_list = chosen_triplet_ids.copy()
     expected_improvements = [None] * len(chosen_triplet_ids)
+    nll_values = [None] * len(chosen_triplet_ids)  # NLL from training
+    loss_values = [None] * len(chosen_triplet_ids)  # Loss (MSE proxy) from training
     # Get rows for chosen triplets
     train_df = df[df['triplet'].isin(chosen_triplet_ids)].copy()
     # Get rows for withheld triplets
@@ -71,20 +73,24 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     
     while len(withheld_df) > 0:
         # Evaluate acquisition function
-        best_ei, best_row_idx = gde.step_within_data(train_df, withheld_df)
+        best_ei, best_row_idx, metrics = gde.step_within_data(train_df, withheld_df)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
         #This line ensures that we append the new triplet data to train_df, not replacing it
         train_df = df[df['triplet'] == best_triplet.name]
         withheld_df = withheld_df.drop(index=best_triplet.name)
         
         expected_improvements.append(float(best_ei))
+        nll_values.append(metrics.get('nll', None))
+        loss_values.append(metrics.get('loss', None))
         chosen_triplets_list.append(best_triplet.name)
         iteration += 1
 
     # Save results
     results_df = pd.DataFrame({
         'chosen_triplets': chosen_triplets_list,
-        'expected_improvements': expected_improvements
+        'expected_improvements': expected_improvements,
+        'nll': nll_values,
+        'loss': loss_values
     })
     results_df.to_csv(run_dir / 'chosen_triplets.csv')
     
@@ -192,6 +198,51 @@ if __name__ == '__main__':
     print(f"Saved: {OUTPUT_BASE / 'active_learning_combined.png'}")
     plt.close()
     
+    # Reset index to avoid duplicate label issues in seaborn
+    all_df = all_df.reset_index(drop=True)
+    
+    # ========================================================================
+    # Plot 3: NLL over steps (training quality metric)
+    # ========================================================================
+    if 'nll' in all_df.columns:
+        plt.figure(figsize=(5, 4))
+        sns.lineplot(
+            data=all_df[all_df['step'] >= 0], 
+            x='step', 
+            y='nll', 
+            hue='model',
+            errorbar='sd'
+        )
+        plt.ylabel('NLL (Negative Log-Likelihood)')
+        plt.xlabel('Step')
+        plt.title('Model Uncertainty (NLL) vs Active Learning Step')
+        plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.savefig(OUTPUT_BASE / 'nll_over_steps.png', dpi=300, bbox_inches='tight')
+        print(f"Saved: {OUTPUT_BASE / 'nll_over_steps.png'}")
+        plt.close()
+    
+    # ========================================================================
+    # Plot 4: Loss (MSE) over steps (training fit quality)
+    # ========================================================================
+    if 'loss' in all_df.columns:
+        plt.figure(figsize=(5, 4))
+        sns.lineplot(
+            data=all_df[all_df['step'] >= 0], 
+            x='step', 
+            y='loss', 
+            hue='model',
+            errorbar='sd'
+        )
+        plt.ylabel('Loss (Neg. Marginal Log-Likelihood for GP)')
+        plt.xlabel('Step')
+        plt.title('Training Loss vs Active Learning Step')
+        plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.savefig(OUTPUT_BASE / 'loss_over_steps.png', dpi=300, bbox_inches='tight')
+        print(f"Saved: {OUTPUT_BASE / 'loss_over_steps.png'}")
+        plt.close()
+    
     # ========================================================================
     # Summary statistics
     # ========================================================================
@@ -201,6 +252,8 @@ if __name__ == '__main__':
     
     for model_name in MODELS:
         steps_to_finish = []
+        final_nlls = []
+        final_losses = []
         for run_dir in OUTPUT_BASE.iterdir():
             if not run_dir.is_dir() or not run_dir.name.startswith(model_name):
                 continue
@@ -219,6 +272,16 @@ if __name__ == '__main__':
             i0 = 2
             chosen_df['step'] = chosen_df.index - i0
             
+            # Collect final NLL and loss values (last non-null).
+            # Simplified: try to append the last non-NaN value for each column,
+            # skip silently if the column is missing or contains only NaNs.
+            for col, storage in (('nll', final_nlls), ('loss', final_losses)):
+                try:
+                    storage.append(chosen_df[col].dropna().iat[-1])
+                except Exception:
+                    # missing column or all-NaN -> skip
+                    pass
+            
             # Find step where cummax FE exceeds 0.245
             filtered = chosen_df[chosen_df['cummax FE'] > 0.245]
             if not filtered.empty:
@@ -236,6 +299,10 @@ if __name__ == '__main__':
             
             print(f"\n{model_name}:")
             print(f"  Mean steps to FE=0.245: {mean_steps:.2f} ± {std_steps:.2f}")
+            if final_losses:
+                print(f"  Final MSE (loss): {np.mean(final_losses):.4f} ± {np.std(final_losses):.4f}")
+            if final_nlls:
+                print(f"  Final NLL: {np.mean(final_nlls):.4f} ± {np.std(final_nlls):.4f}")
             print(f"  Acceleration factor: {accel_factor:.2f}x")
     
     print("\nDone!")

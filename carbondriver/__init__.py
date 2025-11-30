@@ -109,6 +109,7 @@ class GDEOptimizer():
     def get_predictor(self):
         '''
         Train and return the new predictor based on the new data.
+        Returns: (model, stats) tuple where stats is a DataFrame with training metrics.
         '''
         # Special handling for GP and GP+Ph models: these use gpytorch training functions
         # (they are not compatible with the ensemble training pipeline used for MLP/Ph).
@@ -123,8 +124,7 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
 
             # Train GP and return BoTorch-compatible model
-            _, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
-            
+            stats, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
 
 
         elif self.model == MultitaskGPhysModel:
@@ -187,9 +187,9 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
                 model_factory = self.model
 
-            _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+            stats, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
-        return model
+        return model, stats
 
     def _get_acquisition_function(self, predictor):
         """
@@ -230,7 +230,7 @@ class GDEOptimizer():
         
         #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
         try:
-            predictor = self.get_predictor()
+            predictor, stats = self.get_predictor()
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined. Returning a random candidate.")
             x_candidate = torch.randn(len(self.input_labels)) * (raw_bounds[1,:] - raw_bounds[0,:]) + raw_bounds[0,:]
@@ -306,15 +306,15 @@ class GDEOptimizer():
         self.update_data(new_data)
         
         try:
-            predictor = self.get_predictor()
+            predictor, stats = self.get_predictor()
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined.")
-            return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+            return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
         except RuntimeError as e:
             msg = str(e)
             if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
                 print("RuntimeError during GP training. Treating as underdetermined.")
-                return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+                return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
             else:
                 raise
             
@@ -345,5 +345,17 @@ class GDEOptimizer():
 
         best_idx = int(target_scores.argmax().item())
         best_ei = float(target_scores[best_idx].item())
-        return best_ei, best_idx
+        
+        # Extract final training metrics from stats
+        metrics = {}
+        if 'nll' in stats.columns:
+            # Get last non-NaN NLL value
+            nll_vals = stats['nll'].dropna()
+            metrics['nll'] = float(nll_vals.iloc[-1]) if len(nll_vals) > 0 else np.nan
+        if 'loss' in stats.columns:
+            # Get last non-NaN loss (often MSE/MAE proxy)
+            loss_vals = stats['loss'].dropna()
+            metrics['loss'] = float(loss_vals.iloc[-1]) if len(loss_vals) > 0 else np.nan
+        
+        return best_ei, best_idx, metrics
         
