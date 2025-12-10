@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 import numpy as np
 #torch.autograd.set_detect_anomaly(True)
-from botorch.acquisition.analytic import LogExpectedImprovement
+from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
@@ -22,7 +22,7 @@ class GDEOptimizer():
         Initialize the optimizer with the specified model and acquisition function.
 
         :param model_name: Name of the model to use (e.g., 'GP', 'Ph', 'MLP', 'GP+Ph')
-        :param aquisition: Acquisition function to use (e.g., 'EI' for Log Expected Improvement)
+        :param aquisition: Acquisition function to use (e.g., 'EI' for Expected Improvement)
         :param quantity: The quantity to optimize (e.g., 'FE (Eth)')
         :param maximize: Whether to maximize or minimize the quantity
         :param output_dir: Directory to save output files
@@ -197,7 +197,7 @@ class GDEOptimizer():
         """
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
-            return LogExpectedImprovement(
+            return ExpectedImprovement(
                 predictor,
                 best_f=best_f,
                 maximize=self.maximize,
@@ -351,11 +351,22 @@ class GDEOptimizer():
         if 'nll' in stats.columns:
             # Get last non-NaN NLL value
             nll_vals = stats['nll'].dropna()
-            metrics['nll'] = float(nll_vals.iloc[-1]) if len(nll_vals) > 0 else np.nan
+            if len(nll_vals) > 0:
+                metrics['nll'] = float(nll_vals.iloc[-1])
+            else:
+                metrics['nll'] = np.nan
+        else:
+            metrics['nll'] = np.nan
+            
         if 'loss' in stats.columns:
             # Get last non-NaN loss (often MSE/MAE proxy)
             loss_vals = stats['loss'].dropna()
-            metrics['loss'] = float(loss_vals.iloc[-1]) if len(loss_vals) > 0 else np.nan
+            if len(loss_vals) > 0:
+                metrics['loss'] = float(loss_vals.iloc[-1])
+            else:
+                metrics['loss'] = np.nan
+        else:
+            metrics['loss'] = np.nan
         
         return best_ei, best_idx, metrics
         

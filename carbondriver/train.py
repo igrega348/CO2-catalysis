@@ -235,7 +235,7 @@ def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    stats = {x:np.nan for x in ['loss','val_loss']} | {'step':np.arange(num_iter)}
+    stats = {x:np.nan for x in ['loss','val_loss','nll']} | {'step':np.arange(num_iter)}
     stats = pd.DataFrame(stats).set_index('step')
 
     model.train()
@@ -265,7 +265,7 @@ def train_GP(X_train, y_train, mean_model, num_iter):
     # Find optimal model hyperparameters
     model.train()
     likelihood.train()
-    stats = {x:np.nan for x in ['loss','val_loss']} | {'step':np.arange(num_iter)}
+    stats = {x:np.nan for x in ['loss','val_loss','nll']} | {'step':np.arange(num_iter)}
     stats = pd.DataFrame(stats).set_index('step')
 
 
@@ -276,6 +276,18 @@ def train_GP(X_train, y_train, mean_model, num_iter):
         loss.backward()
         optimizer.step()
         stats.loc[it, 'loss'] = loss.item()
+
+        # Compute NLL for evaluation
+        if it%5==0:
+            model.eval()
+            likelihood.eval()
+
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                predictions = likelihood(model(X_train+1e-6*(torch.rand(X_train.shape)-0.5)))
+                stats.loc[it, 'nll'] = get_nll(predictions, y_train).item()
+
+            model.train()
+            likelihood.train()
 
     return stats, model
     
