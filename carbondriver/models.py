@@ -7,7 +7,7 @@ from gpytorch.distributions import MultitaskMultivariateNormal
 
 
 class PhModel(torch.nn.Module):
-    '''
+    """
     Model for predicting the Faradaic efficiency of CO and C2H4 on a catalyst.
 
     The model is a neural network that takes in the following inputs:
@@ -21,20 +21,26 @@ class PhModel(torch.nn.Module):
 
     Values of particle radius r and porosity ε are in
     sensible ranges (40 nm < r < 65 nm, 0.5 < ε < 0.8).
-    '''
-    
+    """
+
     def __init__(
-        self,
-        zlt_mu: float,
-        zlt_sigma: float,
-        current_target: float = 200,
-        dropout: float = 0.1,
-        ldim: int = 64,
-        config: Optional[Dict[str, Any]] = None,
+            self,
+            zlt_mu: float,
+            zlt_sigma: float,
+            current_target: float = 200,
+            dropout: float = 0.1,
+            ldim: int = 64,
+            config: Optional[Dict[str, Any]] = None,
+            input_labels: Optional[list] = None,
+
     ):
         super().__init__()
+        self.input_labels = input_labels or ['AgCu Ratio', 'Naf vol (ul)', 'Sust vol (ul)', 'Zero_eps_thickness',
+                                             'Catalyst mass loading']
+        n_inputs = len(self.input_labels)
+
         self.net = torch.nn.Sequential(
-            torch.nn.Linear(5, ldim),
+            torch.nn.Linear(n_inputs, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
             torch.nn.Linear(ldim, ldim),
@@ -54,8 +60,8 @@ class PhModel(torch.nn.Module):
         erc['alpha_C2H4'] = torch.nn.parameter.Parameter(torch.tensor(erc['alpha_C2H4']))
         erc['alpha_H2b'] = torch.nn.parameter.Parameter(torch.tensor(erc['alpha_H2b']))
         self.ph_model = gde_multi.System(
-            diffusion_coefficients=gde_multi.diffusion_coefficients, 
-            salting_out_exponents=gde_multi.salting_out_exponents, 
+            diffusion_coefficients=gde_multi.diffusion_coefficients,
+            salting_out_exponents=gde_multi.salting_out_exponents,
             electrode_reaction_kinetics=erc,
             electrode_reaction_potentials=gde_multi.electrode_reaction_potentials,
             chemical_reaction_rates=gde_multi.chemical_reaction_rates,
@@ -78,26 +84,34 @@ class PhModel(torch.nn.Module):
         r = 40e-9 * torch.exp(latents[..., [0]])
         eps = torch.sigmoid(latents[..., [1]])
 
-        # If inputs are normalized, denormalize Zero_eps_thickness (feature index 3)
+        # If inputs are normalized, denormalize Zero_eps_thickness
+        # Zero_eps_thickness must exist for the physics model
+        try:
+            zlt_idx = self.input_labels.index("Zero_eps_thickness")
+        except ValueError:
+            raise ValueError("PhModel requires 'Zero_eps_thickness' to be present in input_labels.")
+
         if bool(self.config.get("normalize", False)):
-            zlt = (x[..., 3] * self.zlt_sigma + self.zlt_mu).view(-1, 1)
+            zlt = (x[..., zlt_idx] * self.zlt_sigma + self.zlt_mu).view(-1, 1)
         else:
-            zlt = x[..., 3].view(-1, 1)
+            zlt = x[..., zlt_idx].view(-1, 1)
+
         # Prevent division by zero in L calculation
         L = zlt / (1 - eps)
         K_dl_factor = torch.exp(latents[..., [2]])
-        thetas = self.softmax(2*latents[..., 3:])
+        thetas = self.softmax(2 * latents[..., 3:])
         # CO activation must not be zero
-        theta0 = thetas[...,[0]]
-        theta1 = thetas[...,[1]]
-        theta2 = thetas[...,[2]]
+        theta0 = thetas[..., [0]]
+        theta1 = thetas[..., [1]]
+        theta2 = thetas[..., [2]]
         thetas = {
             'CO': theta0,
             'C2H4': theta1,
             'H2b': theta2
         }
-        gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
-        #print(f"r: {r}, eps: {eps}, K_dl_factor: {K_dl_factor}, thetas: {thetas}, gdl_mass_transfer_coefficient: {gdl_mass_transfer_coefficient}")
+        gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'],
+                                                                              eps) / r
+        # print(f"r: {r}, eps: {eps}, K_dl_factor: {K_dl_factor}, thetas: {thetas}, gdl_mass_transfer_coefficient: {gdl_mass_transfer_coefficient}")
         solution = self.ph_model.solve_current(
             i_target=self.current_target,
             eps=eps,
@@ -106,7 +120,7 @@ class PhModel(torch.nn.Module):
             thetas=thetas,
             gdl_mass_transfer_coeff=gdl_mass_transfer_coefficient,
             grid_size=1000,
-            voltage_bounds=(-1.25,0)
+            voltage_bounds=(-1.25, 0)
         )
 
         out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
@@ -120,7 +134,6 @@ class MLPModel(torch.nn.Module):
         """
         super().__init__()
         self.mlp = torch.nn.Sequential(
-            # Input dimension is inferred at first forward pass
             torch.nn.Linear(n_inputs, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
@@ -138,29 +151,31 @@ class MLPModel(torch.nn.Module):
         return self.mlp(x)
 
 
-
-class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
+class BoTorchGP(GPyTorchModel):  # Wrapper for EI acquisition function
     def __init__(self, model, likelihood):
         super().__init__()
         self.model = model
         self.likelihood = likelihood
-        self._num_outputs = 1
+        # BoTorch expects num outputs to match the model tasks
+        self._num_outputs = getattr(model, "num_tasks", 1)
 
     def forward(self, x):
         x_in = x
         if x.dim() == 3 and x.shape[1] == 1:
-            x_in = x.squeeze(1) #Ensure correct shape for model input
-        mvn = self.model(x_in) #delegate to the underlying ExactGP's forward (i.e., call self.model(x_in))
+            x_in = x.squeeze(1)  # Ensure correct shape for model input
+        mvn = self.model(x_in)  # delegate to the underlying ExactGP's forward (i.e., call self.model(x_in))
         return mvn
 
+
 class MultitaskGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
-        super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
+    def __init__(self, train_x, train_y, likelihood, num_tasks: Optional[int] = None):
+        super().__init__(train_x, train_y, likelihood)
+        self.num_tasks = int(num_tasks) if num_tasks is not None else int(train_y.shape[-1])
         self.mean_module = gpytorch.means.MultitaskMean(
-            gpytorch.means.ConstantMean(), num_tasks=2
+            gpytorch.means.ConstantMean(), num_tasks=self.num_tasks
         )
         self.covar_module = gpytorch.kernels.MultitaskKernel(
-            gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
+            gpytorch.kernels.RBFKernel(), num_tasks=self.num_tasks, rank=1
         )
 
     def forward(self, x):
@@ -168,18 +183,21 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
 
+
 class MyMean(gpytorch.means.Mean):
     """
     Mean function.
     """
+
     def __init__(self, model: Optional[torch.nn.Module] = None, freeze_model: bool = False):
         super().__init__()
         if model is not None:
             self.model = model
         else:
             print('No model provided, using default PhModel with placeholder parameters.')
-            self.model = PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233)
-        
+            self.model = PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']),
+                                 current_target=233)
+
         if freeze_model:
             def remove_dropout(m: torch.nn.Module):
                 for child in m.children():
@@ -187,20 +205,29 @@ class MyMean(gpytorch.means.Mean):
                         child.p = 0
                     else:
                         remove_dropout(child)
-            
+
             for param in self.model.parameters():
                 param.requires_grad = False
             remove_dropout(self.model)
 
     def forward(self, x):
         return self.model(x).squeeze()
-    
+
+
 class MultitaskGPhysModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, model: Optional[torch.nn.Module] = None, freeze_model: bool = False):
-        super(MultitaskGPhysModel, self).__init__(train_x, train_y, likelihood)
+    def __init__(self, train_x, train_y, likelihood, model: Optional[torch.nn.Module] = None,
+                 freeze_model: bool = False):
+        super().__init__(train_x, train_y, likelihood)
+        num_tasks = int(train_y.shape[-1])
+
+        # The physics mean (PhModel) outputs 2 targets (C2H4, CO). If you want other outputs,
+        # GP+Ph is not defined unless you also change the physics model.
+        if num_tasks != 2:
+            raise ValueError(f"GP+Ph currently requires exactly 2 outputs, but got {num_tasks}.")
+
         self.mean_module = MyMean(model=model, freeze_model=freeze_model)
         self.covar_module = gpytorch.kernels.MultitaskKernel(
-            gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
+            gpytorch.kernels.RBFKernel(), num_tasks=num_tasks, rank=1
         )
 
     def forward(self, x):
