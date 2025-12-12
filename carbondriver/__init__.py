@@ -6,19 +6,21 @@ from .config import default_config
 import pandas as pd
 import torch
 import numpy as np
-#torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 from botorch.acquisition.analytic import LogExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
 from botorch.models.ensemble import EnsembleModel
 
+
 class GDEOptimizer():
     """
     Class to optimize gas diffusion electrodes experimental parameters based with Bayesian optimization using various models.
     """
-    
-    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None, input_labels=None, output_labels=None):
+
+    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out",
+                 config=default_config, bounds=None, input_labels=None, output_labels=None):
         """
         Initialize the optimizer with the specified model and acquisition function.
 
@@ -29,9 +31,9 @@ class GDEOptimizer():
         :param output_dir: Directory to save output files
         :param config: Configuration dictionary with parameters for training and normalization
         :param bounds: Bounds for the optimization, should be a tensor of shape (2, num_features)
-        
+
         """
-        
+
         if model_name == 'GP':
             self.model = MultitaskGPModel
         elif model_name == 'Ph':
@@ -42,7 +44,7 @@ class GDEOptimizer():
             self.model = MultitaskGPhysModel
         else:
             raise ValueError
-            
+
         if aquisition == "EI":
             self.aquisition = aquisition
         else:
@@ -63,7 +65,9 @@ class GDEOptimizer():
         self._bounds = bounds
 
         if input_labels is None:
-            self.input_labels = ['AgCu Ratio',  'Naf vol (ul)',  'Sust vol (ul)',  'Zero_eps_thickness',  'Catalyst mass loading']
+            self.input_labels = ['AgCu Ratio', 'Naf vol (ul)', 'Sust vol (ul)', 'Zero_eps_thickness',
+                                 'Catalyst mass loading']
+            print("default chosen +++++++++++++++++++")
         else:
             # If input_labels are provided, use them
             self.input_labels = input_labels
@@ -76,7 +80,7 @@ class GDEOptimizer():
 
         # Stats for normalization of feature columns (set in get_predictor when normalize=True)
         self._means = None  # torch.Tensor of shape (d,)
-        self._stds = None   # torch.Tensor of shape (d,)
+        self._stds = None  # torch.Tensor of shape (d,)
 
     @property
     def bounds(self):
@@ -88,11 +92,11 @@ class GDEOptimizer():
             bds_min = self.df.loc[:, self.input_labels].values.min(axis=0)
             raw_bounds = torch.tensor([bds_min, bds_max], dtype=torch.float32)
             # Debug: show computed raw bounds
-            #print(f"[bounds] raw min: {raw_bounds[0].tolist()} raw max: {raw_bounds[1].tolist()}")
+            # print(f"[bounds] raw min: {raw_bounds[0].tolist()} raw max: {raw_bounds[1].tolist()}")
             return raw_bounds
         else:
             return self._bounds
-        
+
     def load(path):
         '''
         Load pretrained model.
@@ -162,6 +166,7 @@ class GDEOptimizer():
                 zlt_sigma=sigma,
                 current_target=233,
                 config=self.config,
+                input_labels=self.input_labels,
             )
 
             # Train GP+Ph and return BoTorch-compatible model
@@ -195,6 +200,7 @@ class GDEOptimizer():
                         zlt_sigma=sigma,
                         current_target=233,
                         config=self.config,
+                        input_labels=self.input_labels,
                     )
 
                 elif self.model == MLPModel:
@@ -224,6 +230,7 @@ class GDEOptimizer():
                     zlt_sigma=sigma,
                     current_target=233,
                     config=self.config,
+                    input_labels=self.input_labels,
                 )
 
             else:
@@ -257,9 +264,9 @@ class GDEOptimizer():
             )
 
             class Predictor(EnsembleModel):
-                def __init__(self):
+                def __init__(self, num_outputs: int):
                     super().__init__()
-                    self._num_outputs = 1
+                    self._num_outputs = int(num_outputs)
 
                 def forward(self, X: torch.Tensor):
                     # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
@@ -285,7 +292,7 @@ class GDEOptimizer():
 
                     return result
 
-            return Predictor()
+            return Predictor(num_outputs=len(self.output_labels))
 
     def _get_acquisition_function(self, predictor):
         """
@@ -302,10 +309,10 @@ class GDEOptimizer():
             # Check if this is a GP model (BoTorchGP wrapper) or ensemble model
             if hasattr(predictor, 'model') and hasattr(predictor.model, 'likelihood'):
                 # This is a GP model - use posterior transform
-                weights = torch.zeros(2, dtype=torch.float32)
+                weights = torch.zeros(len(self.output_labels), dtype=torch.float32)
                 weights[target_idx] = 1.0
                 post_tf = ScalarizedPosteriorTransform(weights=weights)
-                #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
+                # print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
                 return LogExpectedImprovement(
                     predictor,
                     best_f=best_f,
@@ -315,7 +322,7 @@ class GDEOptimizer():
             else:
                 # This is an ensemble model - use LogEI without posterior transform
                 # The acq_wrapper will handle target selection
-                #print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
+                # print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
                 return LogExpectedImprovement(
                     predictor,
                     best_f=best_f,
@@ -323,19 +330,19 @@ class GDEOptimizer():
                 )
         else:
             raise ValueError("Unsupported acquisition function.")
-    
+
     def step(self, new_data, bounds=None):
 
         """
         Perform a step in the optimization process using the new data and bounds.
-        
+
         :param new_data: New data to be added to the existing data for training the model
         :param bounds: Optional bounds for the optimization
 
         :return: The acquisition function value and the next experiment parameters
         """
 
-        #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
+        # print(f"[step] normalize flag: {self.config.get('normalize', False)}")
 
         predictor = self.get_predictor(new_data)
 
@@ -351,15 +358,15 @@ class GDEOptimizer():
                 "Convert lists/arrays with torch.as_tensor(..., dtype=torch.float32) before calling step."
             )
         assert raw_bounds.shape[0] == 2, "Bounds should have shape (2, d)"
-        #print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
+        # print(f"[step] raw bounds min: {raw_bounds[0].tolist()} max: {raw_bounds[1].tolist()}")
 
         # Select the output column index for the quantity by name from the last two columns
 
         try:
-            target_idx =self.output_labels.index(self.quantity)
+            target_idx = self.output_labels.index(self.quantity)
         except ValueError:
             raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
-        #print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
+        # print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
 
         # If normalized, convert bounds to normalized space using stored stats
         # Require an explicit boolean in the config to avoid surprising truthiness.
@@ -374,18 +381,24 @@ class GDEOptimizer():
                 (raw_bounds[0] - means.values) / stds.values,
                 (raw_bounds[1] - means.values) / stds.values,
             ], dim=0)
-            #print(f"[step] normalized bounds min: {bounds_norm[0].tolist()} max: {bounds_norm[1].tolist()}")
+            # print(f"[step] normalized bounds min: {bounds_norm[0].tolist()} max: {bounds_norm[1].tolist()}")
             opt_bounds = bounds_norm.float()
         else:
             opt_bounds = raw_bounds
 
         def AF_q(x):
             vals = AF(x)
+
+            # Some acquisitions can return a scalar tensor (0-d) if batch collapses.
+            if isinstance(vals, torch.Tensor) and vals.dim() == 0:
+                return vals.view(1)
+
             # vals can be:
             #  - 1D: (batch,) already scalar per point
             #  - 2D: (batch, m) for m outputs
             if vals.dim() == 1:
                 return vals
+
             if vals.dim() == 2:
                 if vals.size(1) == 1:
                     return vals.squeeze(1)
@@ -394,21 +407,23 @@ class GDEOptimizer():
                         f"Acquisition returned {vals.size(1)} outputs but target_idx={target_idx}"
                     )
                 return vals[:, target_idx]
-            # Fallback: flatten all but batch dim and take first column
-            return vals.view(vals.shape[0], -1)[:, 0]
+
+            # Fallback: flatten everything except batch dim safely
+            vals_flat = vals.view(vals.shape[0], -1)
+            return vals_flat[:, 0]
 
         next_experiment, _ = optimize_acqf(
             acq_function=AF_q,
             bounds=opt_bounds,
             q=1,
             num_restarts=20,
-            raw_samples=30,
-            options={}, 
+            raw_samples=512,
+            options={},
         )
 
         if self.config['normalize']:
             # Denormalize the candidate if optimization was done in normalized space
-            x_candidate = next_experiment * stds.values +  means.values
+            x_candidate = next_experiment * stds.values + means.values
 
         else:
             x_candidate = next_experiment
@@ -424,9 +439,10 @@ class GDEOptimizer():
         predictor = self.get_predictor(new_data)
 
         if self.config['normalize']:
-            X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
+            X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means,
+                                               stds=self._stds)
             # Persist feature stats for consistency when mixing calls
-            #print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
+            # print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
         else:
             X, y = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
             X = torch.tensor(X, dtype=torch.float32)
@@ -434,7 +450,7 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
-        #print(scores)
+        # print(scores)
         self.i += 1
 
         # Determine index of target for selection
@@ -451,4 +467,3 @@ class GDEOptimizer():
         else:
             target_scores = scores.squeeze()
         return target_scores.max(), target_scores.argmax()
-        
