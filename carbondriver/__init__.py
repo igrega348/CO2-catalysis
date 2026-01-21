@@ -1,5 +1,5 @@
 import gpytorch
-from .models import PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
+from .models import EnsPredictor, PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
 from .loaders import normalize_df_torch, feature_stats
 from .config import default_config
@@ -11,7 +11,6 @@ from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprove
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
-from botorch.models.ensemble import EnsembleModel
 
 class GDEOptimizer():
     """
@@ -23,7 +22,7 @@ class GDEOptimizer():
         Initialize the optimizer with the specified model and acquisition function.
 
         :param model_name: Name of the model to use (e.g., 'GP', 'Ph', 'MLP', 'GP+Ph')
-        :param aquisition: Acquisition function to use (e.g., 'EI' for Log Expected Improvement)
+        :param aquisition: Acquisition function to use (e.g., 'EI' for Expected Improvement)
         :param quantity: The quantity to optimize (e.g., 'FE (Eth)')
         :param maximize: Whether to maximize or minimize the quantity
         :param output_dir: Directory to save output files
@@ -110,6 +109,7 @@ class GDEOptimizer():
     def get_predictor(self):
         '''
         Train and return the new predictor based on the new data.
+        Returns: (model, stats) tuple where stats is a DataFrame with training metrics.
         '''
         # Special handling for GP and GP+Ph models: these use gpytorch training functions
         # (they are not compatible with the ensemble training pipeline used for MLP/Ph).
@@ -124,10 +124,7 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
 
             # Train GP and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
-            
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP (gp_model, likelihood)
+            stats, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
 
 
         elif self.model == MultitaskGPhysModel:
@@ -147,10 +144,8 @@ class GDEOptimizer():
             ph_model_constructor = lambda: PhModel(zlt_mu=mu, zlt_sigma=sigma, current_target=233, config=self.config)
 
             # Train GP+Ph and return BoTorch-compatible model
-            _, _, gp_model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
+            stats, _, model, likelihood = train_GP_Ph_model(X, y, ph_model_constructor, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
             
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP(gp_model, likelihood)
 
         # Handle ensemble models (MLP and Ph)
         else:
@@ -192,38 +187,9 @@ class GDEOptimizer():
                 y = torch.tensor(y, dtype=torch.float32)
                 model_factory = self.model
 
-            _, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
+            stats, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
-            class Predictor(EnsembleModel):
-                def __init__(self):
-                    super().__init__()
-                    self._num_outputs = 1
-            
-                def forward(self, X: torch.Tensor):
-                    # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
-                    if X.dim() == 3 and X.shape[1] == 1:
-                        X_in = X.squeeze(1)  # (batch, d)
-                    elif X.dim() == 2:
-                        X_in = X  # already (batch, d)
-                    else:
-                        # Attempt to reshape conservatively: collapse all but last dim into batch
-                        X_in = X.view(-1, X.shape[-1])
-
-                    model_output = model(X_in)
-                    # Handle different output dimensions
-                    if model_output.dim() == 3:
-                        # Output is [ensemble, batch, features] -> [batch, ensemble, features]
-                        result = model_output.permute((1, 0, 2)).unsqueeze(2) 
-                    elif model_output.dim() == 4:
-                        # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
-                        result = model_output.permute((2, 0, 1, 3))
-                    else:
-                        # Fallback: return as is
-                        result = model_output
-
-                    return result
-
-            return Predictor()
+        return model, stats
 
     def _get_acquisition_function(self, predictor):
         """
@@ -231,34 +197,11 @@ class GDEOptimizer():
         """
         if self.aquisition == "EI":
             best_f = torch.tensor(self.df[self.quantity].max())
-            # Select the correct output index (from the last two columns)
-            try:
-                target_idx = self.output_labels.index(self.quantity)
-            except ValueError:
-                raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
-
-            # Check if this is a GP model (BoTorchGP wrapper) or ensemble model
-            if hasattr(predictor, 'model') and hasattr(predictor.model, 'likelihood'):
-                # This is a GP model - use posterior transform
-                weights = torch.zeros(2, dtype=torch.float32)
-                weights[target_idx] = 1.0
-                post_tf = ScalarizedPosteriorTransform(weights=weights)
-                #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return ExpectedImprovement(
-                    predictor,
-                    best_f=best_f,
-                    maximize=self.maximize,
-                    posterior_transform=post_tf,
-                )
-            else:
-                # This is an ensemble model - use LogEI without posterior transform
-                # The acq_wrapper will handle target selection
-                #print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return ExpectedImprovement(
-                    predictor,
-                    best_f=best_f,
-                    maximize=self.maximize,
-                )
+            return ExpectedImprovement(
+                predictor,
+                best_f=best_f,
+                maximize=self.maximize,
+            )
         else:
             raise ValueError("Unsupported acquisition function.")
     
@@ -287,7 +230,7 @@ class GDEOptimizer():
         
         #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
         try:
-            predictor = self.get_predictor()
+            predictor, stats = self.get_predictor()
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined. Returning a random candidate.")
             x_candidate = torch.randn(len(self.input_labels)) * (raw_bounds[1,:] - raw_bounds[0,:]) + raw_bounds[0,:]
@@ -363,22 +306,21 @@ class GDEOptimizer():
         self.update_data(new_data)
         
         try:
-            predictor = self.get_predictor()
+            predictor, stats = self.get_predictor()
         except torch._C._LinAlgError:
             print("LinAlgError during ensemble training. System may be underdetermined.")
-            return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+            return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
         except RuntimeError as e:
             msg = str(e)
             if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
                 print("RuntimeError during GP training. Treating as underdetermined.")
-                return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze()
+                return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
             else:
                 raise
             
         if self.config['normalize']:
             X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
             # Persist feature stats for consistency when mixing calls
-            #print(f"[step_within_data] normalize=True | X shape: {tuple(X.shape)}, y shape: {tuple(y.shape)}")
         else:
             X, y = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
             X = torch.tensor(X, dtype=torch.float32)
@@ -386,21 +328,45 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
-        #print(scores)
+        if isinstance(scores, torch.Tensor) and scores.dim() == 1:
+            scores = scores.unsqueeze(0)
+
         self.i += 1
 
-        # Determine index of target for selection
-        # Determine target index by name (from last two columns)
-        try:
-            target_idx = self.output_labels.index(self.quantity)
-        except ValueError:
-            raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
+        # Determine target index by name (from the last two columns)
+        target_idx = self.output_labels.index(self.quantity)
         # Robust selection from AF outputs
-        if isinstance(scores, torch.Tensor) and scores.dim() == 2:
+        if isinstance(scores, torch.Tensor):
             if scores.shape[1] <= target_idx:
                 raise RuntimeError(f"AF scores shape {tuple(scores.shape)} has no column {target_idx}")
             target_scores = scores[:, target_idx]
         else:
-            target_scores = scores.squeeze()
-        return target_scores.max(), target_scores.argmax()
+            raise RuntimeError("AF returned non-tensor scores, expected torch.Tensor")
+
+        best_idx = int(target_scores.argmax().item())
+        best_ei = float(target_scores[best_idx].item())
+        
+        # Extract final training metrics from stats
+        metrics = {}
+        if 'nll' in stats.columns:
+            # Get last non-NaN NLL value
+            nll_vals = stats['nll'].dropna()
+            if len(nll_vals) > 0:
+                metrics['nll'] = float(nll_vals.iloc[-1])
+            else:
+                metrics['nll'] = np.nan
+        else:
+            metrics['nll'] = np.nan
+            
+        if 'loss' in stats.columns:
+            # Get last non-NaN loss (often MSE/MAE proxy)
+            loss_vals = stats['loss'].dropna()
+            if len(loss_vals) > 0:
+                metrics['loss'] = float(loss_vals.iloc[-1])
+            else:
+                metrics['loss'] = np.nan
+        else:
+            metrics['loss'] = np.nan
+        
+        return best_ei, best_idx, metrics
         

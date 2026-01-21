@@ -4,7 +4,7 @@ import gpytorch
 from carbondriver import gde_multi
 from botorch.models.gpytorch import GPyTorchModel
 from gpytorch.distributions import MultitaskMultivariateNormal
-
+from botorch.models.ensemble import EnsembleModel
 
 class PhModel(torch.nn.Module):
     '''
@@ -97,7 +97,6 @@ class PhModel(torch.nn.Module):
             'H2b': theta2
         }
         gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
-        #print(f"r: {r}, eps: {eps}, K_dl_factor: {K_dl_factor}, thetas: {thetas}, gdl_mass_transfer_coefficient: {gdl_mass_transfer_coefficient}")
         solution = self.ph_model.solve_current(
             i_target=self.current_target,
             eps=eps,
@@ -133,20 +132,48 @@ class MLPModel(torch.nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
+class EnsPredictor(EnsembleModel):
+    def __init__(self,model_input):
+        super().__init__()
+        self._num_outputs = 1
+        self.model_input = model_input
+
+    def forward(self, X: torch.Tensor):
+        # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
+        if X.dim() == 3 and X.shape[1] == 1:
+            X_in = X.squeeze(1)  # (batch, d)
+        elif X.dim() == 2:
+            X_in = X  # already (batch, d)
+        else:
+            # Attempt to reshape conservatively: collapse all but last dim into batch
+            X_in = X.view(-1, X.shape[-1])
+
+        model_output = self.model_input(X_in)
+        # Handle different output dimensions
+        if model_output.dim() == 3:
+            # Output is [ensemble, batch, features] -> [batch, ensemble, features]
+            result = model_output.permute((1, 0, 2)).unsqueeze(2) 
+        elif model_output.dim() == 4:
+            # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
+            result = model_output.permute((2, 0, 1, 3))
+        else:
+            # Fallback: return as is
+            result = model_output
+
+        return result
 
 class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
-    def __init__(self, model, likelihood):
+    def __init__(self, model):
         super().__init__()
         self.model = model
-        self.likelihood = likelihood
         self._num_outputs = 1
 
     def forward(self, x):
-        x_in = x
         if x.dim() == 3 and x.shape[1] == 1:
-            x_in = x.squeeze(1) #Ensure correct shape for model input
-        mvn = self.model(x_in) #delegate to the underlying ExactGP's forward (i.e., call self.model(x_in))
-        return mvn
+            X_in = x.squeeze(1)  # (batch, d)
+        elif x.dim() == 2:
+            X_in = x  # already (batch, d)
+        return self.model(X_in)
 
 class MultitaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
@@ -157,7 +184,7 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
         self.covar_module = gpytorch.kernels.MultitaskKernel(
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
-
+        self.num_outputs = 2
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
