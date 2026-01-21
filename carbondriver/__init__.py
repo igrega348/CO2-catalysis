@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 import numpy as np
 #torch.autograd.set_detect_anomaly(True)
-from botorch.acquisition.analytic import LogExpectedImprovement
+from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
 
@@ -244,7 +244,7 @@ class GDEOptimizer():
                 weights[target_idx] = 1.0
                 post_tf = ScalarizedPosteriorTransform(weights=weights)
                 #print(f"[_get_acquisition_function] Using LogEI with posterior transform | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return LogExpectedImprovement(
+                return ExpectedImprovement(
                     predictor,
                     best_f=best_f,
                     maximize=self.maximize,
@@ -254,7 +254,7 @@ class GDEOptimizer():
                 # This is an ensemble model - use LogEI without posterior transform
                 # The acq_wrapper will handle target selection
                 #print(f"[_get_acquisition_function] Using LogEI for ensemble | best_f={best_f.item():.6f} | target_idx={target_idx} | maximize={self.maximize}")
-                return LogExpectedImprovement(
+                return ExpectedImprovement(
                     predictor,
                     best_f=best_f,
                     maximize=self.maximize,
