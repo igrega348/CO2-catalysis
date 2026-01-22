@@ -39,3 +39,4 @@ solution = ph_model.solve_current(
 )
 
 print(solution)
+print("Voltage (V vs SHE): ", solution['voltage'])
