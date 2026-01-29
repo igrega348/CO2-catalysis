@@ -162,6 +162,7 @@ class GDEOptimizer():
                         zlt_sigma=sigma,
                         current_target=233,
                         config=self.config,
+                        dropout=0.0,
                     )
                 else:
                     # MLP model with normalization
@@ -328,6 +329,8 @@ class GDEOptimizer():
 
         AF = self._get_acquisition_function(predictor)
         scores = AF(X.unsqueeze(1))
+        #breakpoint()
+        print('FE Value: ', predictor(X).mean(dim=1).squeeze()[:,0])
         if isinstance(scores, torch.Tensor) and scores.dim() == 1:
             scores = scores.unsqueeze(0)
 
@@ -342,7 +345,7 @@ class GDEOptimizer():
             target_scores = scores[:, target_idx]
         else:
             raise RuntimeError("AF returned non-tensor scores, expected torch.Tensor")
-
+        print(f"Target scores : {target_scores}")
         best_idx = int(target_scores.argmax().item())
         best_ei = float(target_scores[best_idx].item())
         
@@ -368,5 +371,5 @@ class GDEOptimizer():
         else:
             metrics['loss'] = np.nan
         
-        return best_ei, best_idx, metrics
+        return best_ei, best_idx, #metrics
         

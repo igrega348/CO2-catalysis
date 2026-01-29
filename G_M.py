@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
-
+import warnings
+warnings.filterwarnings("ignore")
 # ============================================================================
 # CONFIGURATION - Modify these to test specific triplet combinations
 # ============================================================================
@@ -26,13 +27,13 @@ from carbondriver.loaders import load_gas_data
 MANUAL_TRIPLETS = {
     'Ph': [
         # From Ph_F28 (peak_step=0, fastest)
-        [9, 28, 27],
+        #[9, 28, 27],
         # From Ph_F13 (peak_step=2)
         [24, 29, 20],
         # From Ph_F25 (peak_step=2)
-        [28, 24, 11],
+        #[28, 24, 11],
         # From Ph_F27 (peak_step=2)
-        [17, 20, 9],
+        #[17, 20, 9],
     ],
     'GP+Ph': [
         # From GP_Ph_F12 (peak_step=-1, found triplet 27 immediately)
@@ -73,7 +74,6 @@ def run_manual_experiment(model_name: str, initial_triplets: list, run_idx: int)
     """
     # Reset df for this run
     df_triplet_means = df.groupby('triplet').mean()
-    
     run_dir = OUTPUT_BASE / f'{model_name}_manual_{run_idx:03d}'
     run_dir.mkdir(exist_ok=True, parents=True)
     
@@ -93,7 +93,7 @@ def run_manual_experiment(model_name: str, initial_triplets: list, run_idx: int)
     
     # Use manually specified initial triplets
     chosen_triplet_ids = list(initial_triplets)
-    
+    print('df_triplet means: ', df_triplet_means.loc[chosen_triplet_ids])
     # Track results
     chosen_triplets_list = chosen_triplet_ids.copy()
     expected_improvements = [None] * len(chosen_triplet_ids)
@@ -120,10 +120,12 @@ def run_manual_experiment(model_name: str, initial_triplets: list, run_idx: int)
         chosen_triplets_list.append(best_triplet.name)
         
         # Print the first few selections for debugging
-        if iteration < 3:
+        if iteration < 4:
             print(f"    Iteration {iteration + 1}: Selected triplet {best_triplet.name} (EI: {best_ei:.6f})")
-        
+        #breakpoint()
         iteration += 1
+        if iteration == 4:
+            break  # Limit to 4 iterations for testing
 
     # Save results
     results_df = pd.DataFrame({
