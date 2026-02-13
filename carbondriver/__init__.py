@@ -10,7 +10,9 @@ import numpy as np
 from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
+import warnings
 
+SUPPORTED_AFs = ["EI", "logEI"]
 
 class GDEOptimizer():
     """
@@ -42,10 +44,12 @@ class GDEOptimizer():
         else:
             raise ValueError
             
-        if aquisition == "EI":
+        if aquisition in SUPPORTED_AFs:
             self.aquisition = aquisition
+            if self.aquisition == "EI":
+                print("WARNING: You are using expected improvement, logEI is recommended instead.")
         else:
-            raise ValueError("Only EI is supported for now.")
+            raise ValueError(f"Only {' and '.join(SUPORTED_AFs)} are supported for now.")
 
         self.output_dir = output_dir
 
@@ -106,6 +110,22 @@ class GDEOptimizer():
         
         self.df = pd.concat([self.df, new_data], axis=0)
 
+        self.df.sort_values(by="triplet", inplace=True) # TMP
+
+    def get_data_tensors(self):
+
+        #TODO: This needs to handle when to use exiting means and when not to somehow
+        
+        if self.config['normalize']:
+            X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
+
+        else:
+            X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
+            X = torch.tensor(X, dtype=torch.float32)
+            y = torch.tensor(y, dtype=torch.float32)
+
+        return X, y
+
     def get_predictor(self):
         '''
         Train and return the new predictor based on the new data.
@@ -117,7 +137,6 @@ class GDEOptimizer():
             # Normalize if requested
             if self.config['normalize']:
                 X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
-
             else:
                 X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
                 X = torch.tensor(X, dtype=torch.float32)
@@ -195,10 +214,30 @@ class GDEOptimizer():
     def _get_acquisition_function(self, predictor):
         """
         Get the acquisition function based on the specified acquisition type.
+
+        Note: The acquisition function is in normalized space if normalizatipon is enabled, so the expected imporovment is not the actual value for example. Also normalizing here just for consistency because y is not actually normalized.
         """
+
+        if self.config['normalize']:
+            _, y, _, _, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
+        else:
+            y = self.df.loc[:, self.output_labels].values
+            X = torch.tensor(X, dtype=torch.float32)
+
+        target_idx = self.output_labels.index(self.quantity)
+            
+        best_f = y[:,target_idx].max()
+        
         if self.aquisition == "EI":
-            best_f = torch.tensor(self.df[self.quantity].max())
-            return ExpectedImprovement(
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return ExpectedImprovement(
+                    predictor,
+                    best_f=best_f,
+                    maximize=self.maximize,
+                )
+        if self.aquisition == "logEI":
+            return LogExpectedImprovement(
                 predictor,
                 best_f=best_f,
                 maximize=self.maximize,
@@ -229,7 +268,6 @@ class GDEOptimizer():
             )
         assert raw_bounds.shape[0] == 2, "Bounds should have shape (2, d)"
         
-        #print(f"[step] normalize flag: {self.config.get('normalize', False)}")
         try:
             predictor, stats = self.get_predictor()
         except torch._C._LinAlgError:
@@ -302,7 +340,7 @@ class GDEOptimizer():
 
         return ei_val, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
 
-    def step_within_data(self, new_data, possible_data):
+    def step_within_data(self, new_data, possible_data, return_metrics=False):
         
         self.update_data(new_data)
         
@@ -320,32 +358,31 @@ class GDEOptimizer():
                 raise
             
         if self.config['normalize']:
-            X, y, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
-            # Persist feature stats for consistency when mixing calls
+            X, _, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
         else:
-            X, y = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
+            X, _ = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
             X = torch.tensor(X, dtype=torch.float32)
-            y = torch.tensor(y, dtype=torch.float32)
 
         AF = self._get_acquisition_function(predictor)
-        scores = AF(X.unsqueeze(1))
-        #breakpoint()
-        print('FE Value: ', predictor(X).mean(dim=1).squeeze()[:,0])
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            scores = AF(X.unsqueeze(1))
+
         if isinstance(scores, torch.Tensor) and scores.dim() == 1:
             scores = scores.unsqueeze(0)
 
         self.i += 1
 
-        # Determine target index by name (from the last two columns)
         target_idx = self.output_labels.index(self.quantity)
-        # Robust selection from AF outputs
+
         if isinstance(scores, torch.Tensor):
             if scores.shape[1] <= target_idx:
                 raise RuntimeError(f"AF scores shape {tuple(scores.shape)} has no column {target_idx}")
             target_scores = scores[:, target_idx]
         else:
             raise RuntimeError("AF returned non-tensor scores, expected torch.Tensor")
-        print(f"Target scores : {target_scores}")
+        print(f"Target scores : {target_scores.tolist()}")
         best_idx = int(target_scores.argmax().item())
         best_ei = float(target_scores[best_idx].item())
         
@@ -370,6 +407,9 @@ class GDEOptimizer():
                 metrics['loss'] = np.nan
         else:
             metrics['loss'] = np.nan
-        
-        return best_ei, best_idx, #metrics
+
+        if return_metrics:
+            return best_ei, best_idx, metrics
+        else:
+            return best_ei, best_idx
         

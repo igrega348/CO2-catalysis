@@ -10,27 +10,34 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
+from typing import Tuple, Optional, Literal
+import torch
 
 NUM_RUNS = 100
-MODELS = ['GP', 'GP+Ph', 'MLP', 'Ph']
+MODELS = ['Ph']
 OUTPUT_BASE = Path('_'.join(MODELS) + '_results')
 OUTPUT_BASE.mkdir(exist_ok=True)
+property_name = 'FE (Eth)'
 
 # Load data once
 df = load_gas_data("paper/Characterization_data.xlsx")
 
-
-def choose_base_inds_numpy(y: np.ndarray, num_choose: int, strategy: str = 'uniform'):
-    """Choose initial triplets uniformly or skewed."""
+def choose_base_inds_numpy(y: np.ndarray, num_choose: int, how: Literal['max','min'] = 'max', strategy: Literal['uniform','skewed'] = 'uniform', seed: Optional[int] = None):
     ind = np.argsort(y)
     N = y.shape[0]
     i = np.arange(N)
-    if strategy == 'uniform':
+    if strategy=='skewed':
+        if how=='max':
+            p = (i - i.max())**2
+        elif how=='min':
+            p = i**2
+    elif strategy=='uniform':
         p = np.ones_like(i)
-    else:
+    else: 
         raise ValueError
-    p = p / p.sum()
-    return np.random.choice(ind, size=num_choose, replace=False, p=p)
+    p = p/p.sum()
+    rng = np.random.default_rng(seed)
+    return rng.choice(ind, size=num_choose, replace=False, p=p)
 
 def run_active_learning_experiment(model_name: str, run_idx: int):
     """Run a single active learning experiment for the given model."""
@@ -52,28 +59,33 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     )
     
     # Choose initial triplets
-    chosen_triplet_ids = list(choose_base_inds_numpy(
-        df_triplet_means['FE (Eth)'].values,
+    chosen_triplets_ids = choose_base_inds_numpy(
+        df_triplet_means[property_name].values,
         num_choose=3,
-        strategy='uniform'
-    ))
-    
+        strategy='uniform',
+        seed=run_idx
+    ).tolist()
+
+    bests = df_triplet_means.loc[chosen_triplets_ids][property_name].cummax().tolist()
+    print("Starting triplets:", chosen_triplets_ids)
+    print("Starting bests:", bests)
+
     # Track results
-    chosen_triplets_list = chosen_triplet_ids.copy()
-    expected_improvements = [None] * len(chosen_triplet_ids)
-    nll_values = [None] * len(chosen_triplet_ids)  # NLL from training
-    loss_values = [None] * len(chosen_triplet_ids)  # Loss (MSE proxy) from training
+    expected_improvements = [None] * len(chosen_triplets_ids)
+    nll_values = [None] * len(chosen_triplets_ids)  # NLL from training
+    loss_values = [None] * len(chosen_triplets_ids)  # Loss (MSE proxy) from training
     # Get rows for chosen triplets
-    train_df = df[df['triplet'].isin(chosen_triplet_ids)].copy()
+    train_df = df[df['triplet'].isin(chosen_triplets_ids)].copy()
     # Get rows for withheld triplets
-    withheld_df = df_triplet_means[~df_triplet_means.index.isin(chosen_triplet_ids)].copy()
+    withheld_df = df_triplet_means[~df_triplet_means.index.isin(chosen_triplets_ids)].copy()
 
     # Active learning loop
     iteration = 0
     
     while len(withheld_df) > 0:
+        print(f"Run: {run_idx}, Iteration: {iteration}")
         # Evaluate acquisition function
-        best_ei, best_row_idx, metrics = gde.step_within_data(train_df, withheld_df)
+        best_ei, best_row_idx, metrics = gde.step_within_data(train_df, withheld_df, return_metrics=True)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
         #This line ensures that we append the new triplet data to train_df, not replacing it
         train_df = df[df['triplet'] == best_triplet.name]
@@ -82,12 +94,21 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         expected_improvements.append(float(best_ei))
         nll_values.append(metrics.get('nll', None))
         loss_values.append(metrics.get('loss', None))
-        chosen_triplets_list.append(best_triplet.name)
+        chosen_triplets_ids.append(int(best_triplet.name))
+
+        print("Chosen triplets so far: ", chosen_triplets_ids)
+        bests.append(df_triplet_means.loc[chosen_triplets_ids][property_name].max().item())
+        print("Best FE so far: ", bests)
+        
         iteration += 1
 
+        if best_triplet.name == df_triplet_means[property_name].idxmax():
+            break
+
+    print(f"Found max after {iteration} iterations.")
     # Save results
     results_df = pd.DataFrame({
-        'chosen_triplets': chosen_triplets_list,
+        'chosen_triplets': chosen_triplets_ids,
         'expected_improvements': expected_improvements,
         'nll': nll_values,
         'loss': loss_values
@@ -114,7 +135,7 @@ def process_runs_mean(model_name: str):
         
         # Calculate cummax FE for this run
         chosen_df['cummax FE'] = df_triplet_means.loc[
-            chosen_df['chosen_triplets'], 'FE (Eth)'
+            chosen_df['chosen_triplets'], property_name
         ].cummax().values
         
         # Add step column (offset by 2 to match old convention)
@@ -132,6 +153,7 @@ def process_runs_mean(model_name: str):
 # ============================================================================
 
 if __name__ == '__main__':
+    torch.manual_seed(0)
     # Run experiments for all models
     print(f"Running {NUM_RUNS} experiments for each model...")
     for model in MODELS:
@@ -265,7 +287,7 @@ if __name__ == '__main__':
             chosen_df = pd.read_csv(results_file, index_col=0)
             df_triplet_means = df.groupby('triplet').mean()
             chosen_df['cummax FE'] = df_triplet_means.loc[
-                chosen_df['chosen_triplets'], 'FE (Eth)'
+                chosen_df['chosen_triplets'], property_name
             ].cummax().values
             
             # Add step column (offset by 2 due to triplet indexing)

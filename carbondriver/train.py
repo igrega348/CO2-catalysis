@@ -15,7 +15,6 @@ from rich.progress import track
 from carbondriver.models import EnsPredictor, MultitaskGPhysModel, MultitaskGPModel, BoTorchGP
 
 
-
 def get_cov(batch):
     batch = batch.reshape(*batch.shape[:-2], -1)
     return torch.cov(batch.transpose(-1,-2)) + 1e-6*torch.eye(batch.shape[1])
@@ -34,8 +33,6 @@ def get_nll_samples(samples, targets, covariance_scaler: Optional[torch.Tensor] 
     return -(gmodel.log_prob(targets) / gmodel.event_shape.numel())
 
 def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i, progress=False, plot=False):
-    print('X_train: ', X_train)
-    print('y_train: ', y_train)
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True)
     if plot:
@@ -49,11 +46,8 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
     # set up model and optimizer
     num_models = 50
-    torch.manual_seed(0)
     model = [model_constructor() for _ in range(num_models)]
     params, buffers = stack_module_state(model)
-    #pickle.dump(params, open(f'params_init.pkl', 'wb'))
-    #params = pickle.load(open(f'params_init.pkl', 'rb'))
     base_model = copy.deepcopy(model[0])
     base_model = base_model.to('meta')
     def fmodel(params, buffers, x):
@@ -66,8 +60,8 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
     # batch the train data
     num_data_per_model = ceil(X_train.shape[0]*0.5)
-    inds = torch.stack([torch.arange(num_data_per_model) for _ in range(num_models)], dim=0)
-    #inds = torch.stack([torch.randperm(X_train.shape[0])[:num_data_per_model] for _ in range(num_models)], dim=0)
+    #inds = torch.stack([torch.arange(num_data_per_model) for _ in range(num_models)], dim=0)
+    inds = torch.stack([torch.randperm(X_train.shape[0])[:num_data_per_model] for _ in range(num_models)], dim=0)
     X_train_b = torch.stack([X_train[inds[i], :] for i in range(num_models)], dim=0)
     y_train_b = torch.stack([y_train[inds[i], :] for i in range(num_models)], dim=0)
 
@@ -84,7 +78,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
         output = vmap(fmodel, in_dims=(0, 0, 0), randomness='different')(params, buffers, X_train_b)
         loss = torch.mean((output - y_train_b)**2)
-        print('Iteration :', it, 'Loss: ', loss.item())
         loss.backward()
         optimizer.step()
         stats.loc[it, 'loss'] = loss.item()
@@ -100,7 +93,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
                 std_train = fe_train.std(dim=0)*variance_scaler.sqrt()
             variance_optimizer.zero_grad()
             nll_train = get_nll_samples(fe_train, y_train, covariance_scaler=variance_scaler)
-            print('NLL (per-dim): ', nll_train.item())
             nll_train.backward()
             variance_optimizer.step()
             stats.loc[it, 'nll'] = nll_train.item()
@@ -193,8 +185,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
                 mean_train = predictions.mean
                 std_train = predictions.stddev
                 stats.loc[it, 'nll'] = get_nll(predictions, y_train).item()
-
-
 
     if plot:
         # loss curves
