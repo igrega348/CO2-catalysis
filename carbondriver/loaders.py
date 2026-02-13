@@ -56,7 +56,7 @@ def load_gas_data(file: Optional[Path] = None):
     for i in order:
         new_df = pd.concat([new_df, df[df['triplet'] == i]])
     new_df.reset_index(drop=True, inplace=True)
-    df = new_df
+    #df = new_df
     # normalize
     return df
 

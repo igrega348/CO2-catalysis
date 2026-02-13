@@ -1,4 +1,5 @@
 from pathlib import Path
+import pickle
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -12,8 +13,7 @@ import gpytorch
 import matplotlib.pyplot as plt
 from math import ceil
 from rich.progress import track
-from carbondriver.models import MultitaskGPhysModel, MultitaskGPModel
-
+from carbondriver.models import EnsPredictor, MultitaskGPhysModel, MultitaskGPModel, BoTorchGP
 
 
 def get_cov(batch):
@@ -62,6 +62,7 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
     # batch the train data
     num_data_per_model = ceil(X_train.shape[0]*0.5)
+    #inds = torch.stack([torch.arange(num_data_per_model) for _ in range(num_models)], dim=0)
     inds = torch.stack([torch.randperm(X_train.shape[0])[:num_data_per_model] for _ in range(num_models)], dim=0)
     X_train_b = torch.stack([X_train[inds[i], :] for i in range(num_models)], dim=0)
     y_train_b = torch.stack([y_train[inds[i], :] for i in range(num_models)], dim=0)
@@ -79,7 +80,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
         output = vmap(fmodel, in_dims=(0, 0, 0), randomness='different')(params, buffers, X_train_b)
         loss = torch.mean((output - y_train_b)**2)
-
         loss.backward()
         optimizer.step()
         stats.loc[it, 'loss'] = loss.item()
@@ -103,7 +103,6 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
             base_model.train()
 
         f = lambda x: round(x.item() if isinstance(x, torch.Tensor) else x, 5)
-
     if plot:
         stats['nll'].dropna().plot(y='nll', c='C0', ls='--', lw=0.7, alpha=0.5, ax=ax[0])
 
@@ -140,7 +139,7 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
         y_diff = y - y.mean(dim=0, keepdim=True)
         return y.mean(dim=0) + y_diff * variance_scaler.sqrt()
 
-    return stats, scaled_model
+    return stats, EnsPredictor(scaled_model)
 
 def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, plot=False):
     DNAME = Path(DNAME)
@@ -157,7 +156,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
 
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-
     model.train()
     likelihood.train()
 
@@ -189,8 +187,6 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
                 mean_train = predictions.mean
                 std_train = predictions.stddev
                 stats.loc[it, 'nll'] = get_nll(predictions, y_train).item()
-
-
 
     if plot:
         # loss curves
@@ -232,13 +228,13 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
             std_test = predictions.stddev
         return mean_test, std_test
 
-    return stats, predict, model, likelihood
+    return stats, predict, BoTorchGP(model), likelihood
 
 def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     model = model_constructor()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    stats = {x:np.nan for x in ['loss','val_loss']} | {'step':np.arange(num_iter)}
+    stats = {x:np.nan for x in ['loss','val_loss','nll']} | {'step':np.arange(num_iter)}
     stats = pd.DataFrame(stats).set_index('step')
 
     model.train()
@@ -268,7 +264,7 @@ def train_GP(X_train, y_train, mean_model, num_iter):
     # Find optimal model hyperparameters
     model.train()
     likelihood.train()
-    stats = {x:np.nan for x in ['loss','val_loss']} | {'step':np.arange(num_iter)}
+    stats = {x:np.nan for x in ['loss','val_loss','nll']} | {'step':np.arange(num_iter)}
     stats = pd.DataFrame(stats).set_index('step')
 
 
@@ -279,6 +275,18 @@ def train_GP(X_train, y_train, mean_model, num_iter):
         loss.backward()
         optimizer.step()
         stats.loc[it, 'loss'] = loss.item()
+
+        # Compute NLL for evaluation
+        if it%5==0:
+            model.eval()
+            likelihood.eval()
+
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                predictions = likelihood(model(X_train+1e-6*(torch.rand(X_train.shape)-0.5)))
+                stats.loc[it, 'nll'] = get_nll(predictions, y_train).item()
+
+            model.train()
+            likelihood.train()
 
     return stats, model
     
@@ -314,4 +322,4 @@ def train_GP_Ph_model(X_train, y_train, model_constructor, num_iter: int, DNAME,
             std_test = predictions.stddev
         return mean_test, std_test
         
-    return stats, predict, model, model.likelihood
+    return stats, predict, BoTorchGP(model), model.likelihood

@@ -1,5 +1,5 @@
 from pathlib import Path
-import random 
+import random
 random.seed(40)
 
 # Path to this test file
@@ -152,14 +152,17 @@ def test_gde_optimizer_within_MLP():
 def test_gde_optimizer_free_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_gas_data
-
+    import numpy as np
+    
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
     df = load_gas_data(data_path)
+    fail_df = df[df['triplet'].isin([1, 24, 19])].copy()
 
+    ei, next_pick = gde.step(fail_df)
+    assert np.isnan(ei), "EI did not return NaN as intended"
+    
+    gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
     ei, next_pick = gde.step(df)
-
-    print(ei, next_pick)
-
 
 
