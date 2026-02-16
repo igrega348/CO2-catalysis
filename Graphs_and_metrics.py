@@ -55,7 +55,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         quantity="FE (Eth)",
         maximize=True,
         output_dir=str(run_dir),
-        config={'num_iter': 101, 'make_plots': False, 'normalize': True}
+        config={'num_iter': 101, 'make_plots': False, 'normalize_inputs': True, 'normalize_outputs': False}
     )
     
     # Choose initial triplets

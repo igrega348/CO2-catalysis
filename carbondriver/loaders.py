@@ -60,22 +60,6 @@ def load_gas_data(file: Optional[Path] = None):
     # normalize
     return df
 
-def normalize_df_torch(df: pd.DataFrame, input_labels:list, output_labels:list, means: Optional[pd.DataFrame] = None, stds: Optional[pd.DataFrame] = None,):
-    if 'triplet' in df.columns:
-        df = df.drop(columns=['triplet'])
-    # normalize
-    if means is None:
-        assert stds is None
-        means = df.mean()
-        stds = df.std(ddof=0)
-    df_n = (df - means) / stds
-    X = df_n.loc[:, input_labels].values # inputs normalized
-    y = df.loc[:, output_labels].values # outputs (not normalized)
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    return X, y, means, stds, df
-
-
 def feature_stats(
     df: pd.DataFrame,
     all_means: Optional[pd.Series] = None,

@@ -1,12 +1,10 @@
-import gpytorch
-from .models import EnsPredictor, PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
+from .models import PhModel, MLPModel, MultitaskGPModel, BoTorchGP, MultitaskGPhysModel
 from .train import train_model_ens, train_GP_model, train_GP_Ph_model
-from .loaders import normalize_df_torch, feature_stats
+from .loaders import feature_stats
 from .config import default_config
 import pandas as pd
 import torch
 import numpy as np
-#torch.autograd.set_detect_anomaly(True)
 from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
@@ -81,6 +79,42 @@ class GDEOptimizer():
         self._means = None  # torch.Tensor of shape (d,)
         self._stds = None   # torch.Tensor of shape (d,)
 
+    def _get_data_tensors(self, data=None, update_stats=False):
+        """
+        Convert DataFrame to tensors, applying normalization if configured.
+        Returns: (X, y) tuple of tensors.
+        """
+
+        if data is None:
+            data = self.df
+        
+        df_clean = data.loc[:, self.input_labels + self.output_labels]
+
+        if update_stats or self._means is None or self._stds is None:
+            self._means = df_clean.mean()
+            self._stds = df_clean.std(ddof=0)
+                
+        if self.config.get('normalize_inputs', False):
+            if self._stds[self.input_labels].min() < 1e-10:
+                raise ValueError("Input feature standard deviation is too small, cannot normalize.")
+
+            X = (df_clean.loc[:, self.input_labels] - self._means[self.input_labels]) / self._stds[self.input_labels]
+        else:
+            X = df_clean.loc[:, self.input_labels]
+        
+        if self.config.get('normalize_outputs', False):
+            if self._stds[self.output_labels].min() < 1e-10:
+                raise ValueError("Output feature standard deviation is too small, cannot normalize.")
+
+            y = (df_clean.loc[:, self.output_labels] - self._means[self.output_labels]) / self._stds[self.output_labels]
+        else:
+            y = df_clean.loc[:, self.output_labels]
+
+        X = torch.tensor(X.values, dtype=torch.float32)
+        y = torch.tensor(y.values, dtype=torch.float32)
+        
+        return X, y
+
     @property
     def bounds(self):
         """
@@ -111,66 +145,31 @@ class GDEOptimizer():
 
         self.df.sort_values(by="triplet", inplace=True) # TMP
 
-    def get_data_tensors(self):
-
-        #TODO: This needs to handle when to use exiting means and when not to somehow
-        
-        if self.config['normalize']:
-            X, y, self._means, self._stds, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels)
-
-        else:
-            X, y = self.df.loc[:, self.input_labels].values, self.df.loc[:, self.output_labels].values
-            X = torch.tensor(X, dtype=torch.float32)
-            y = torch.tensor(y, dtype=torch.float32)
-
-        return X, y
-
+ 
     def get_predictor(self):
         '''
         Train and return the new predictor based on the new data.
         Returns: (model, stats) tuple where stats is a DataFrame with training metrics.
         '''
+        X, y = self._get_data_tensors()
+        
+        # Direct access to precomputed stats for PhModel
+        mu = float(self._means['Zero_eps_thickness'])
+        sigma = float(self._stds['Zero_eps_thickness'])
+
         # Special handling for GP and GP+Ph models: these use gpytorch training functions
         # (they are not compatible with the ensemble training pipeline used for MLP/Ph).
         if self.model == MultitaskGPModel:
-            # Normalize if requested
-            if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(
-                    self.df, self.input_labels, self.output_labels
-                )
-            else:
-                X, y = (
-                    self.df.loc[:, self.input_labels].values,
-                    self.df.loc[:, self.output_labels].values,
-                )
-                X = torch.tensor(X, dtype=torch.float32)
-                y = torch.tensor(y, dtype=torch.float32)
-
+            
             # Train GP and return BoTorch-compatible model
             stats, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
 
             # Return BoTorch-compatible wrapper
-            return BoTorchGP(gp_model, likelihood)
+            return BoTorchGP(model, likelihood)
 
         elif self.model == MultitaskGPhysModel:
             # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
-            if self.config['normalize']:
-                X, y, self._means, self._stds, _ = normalize_df_torch(
-                    self.df, self.input_labels, self.output_labels
-                )
-                # zero-eps stats for PhModel
-                mu = float(self._means['Zero_eps_thickness'])
-                sigma = float(self._stds['Zero_eps_thickness'])
-            else:
-                X, y = (
-                    self.df.loc[:, self.input_labels].values,
-                    self.df.loc[:, self.output_labels].values,
-                )
-                X = torch.tensor(X, dtype=torch.float32)
-                y = torch.tensor(y, dtype=torch.float32)
-                mu = float(self.df['Zero_eps_thickness'].mean())
-                sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
-
+            
             ph_model_constructor = lambda: PhModel(
                 zlt_mu=mu,
                 zlt_sigma=sigma,
@@ -183,62 +182,28 @@ class GDEOptimizer():
 
         # Handle ensemble models (MLP and Ph)
         else:
-            if self.config['normalize']:
-                # Normalize inputs; outputs remain unnormalized
-                X, y, self._means, self._stds, _ = normalize_df_torch(
-                    self.df, self.input_labels, self.output_labels
-                )
+            if self.model == PhModel:
 
-                if self.model == PhModel:
-                    # Pass Zero_eps_thickness stats so model can denormalize that feature
-                    mu = float(self._means['Zero_eps_thickness'])
-                    sigma = float(self._stds['Zero_eps_thickness'])
-                    model_factory = lambda: PhModel(
-                        zlt_mu=mu,
-                        zlt_sigma=sigma,
-                        current_target=233,
-                        config=self.config,
-                        dropout=0.0,
-                    )
-
-                elif self.model == MLPModel:
-                    # MLP model with explicit input/output sizes
-                    n_in = len(self.input_labels)
-                    n_out = len(self.output_labels)
-                    model_factory = lambda: MLPModel(
-                        n_inputs=n_in,
-                        n_outputs=n_out,
-                    )
-                else:
-                    model_factory = self.model
-
-            elif self.config['normalize'] is False and self.model == PhModel:
-                # No normalization: compute tensors directly but still provide stats for completeness
-                X, y = (
-                    self.df.loc[:, self.input_labels].values,
-                    self.df.loc[:, self.output_labels].values,
-                )
-                X = torch.tensor(X, dtype=torch.float32)
-                y = torch.tensor(y, dtype=torch.float32)
-                # Means/stds from raw data for feature-wise info (won't be used if normalize=False)
-                mu = float(self.df['Zero_eps_thickness'].mean())
-                sigma = float(self.df['Zero_eps_thickness'].std(ddof=0))
                 model_factory = lambda: PhModel(
                     zlt_mu=mu,
                     zlt_sigma=sigma,
                     current_target=233,
                     config=self.config,
-                )
+                    dropout=0.0,
+                    )
 
-            else:
-                # No normalization for MLP model or other cases
-                X, y = (
-                    self.df.loc[:, self.input_labels].values,
-                    self.df.loc[:, self.output_labels].values,
-                )
-                X = torch.tensor(X, dtype=torch.float32)
-                y = torch.tensor(y, dtype=torch.float32)
+            elif self.model == MLPModel:
+                 # MLP model with explicit input/output sizes
+                 n_in = len(self.input_labels)
+                 n_out = len(self.output_labels)
+                 model_factory = lambda: MLPModel(
+                     n_inputs=n_in,
+                     n_outputs=n_out,
+                 )
 
+                 
+
+            breakpoint()
             stats, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
         return model, stats
@@ -250,11 +215,7 @@ class GDEOptimizer():
         Note: The acquisition function is in normalized space if normalizatipon is enabled, so the expected imporovment is not the actual value for example. Also normalizing here just for consistency because y is not actually normalized.
         """
 
-        if self.config['normalize']:
-            _, y, _, _, _ = normalize_df_torch(self.df, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
-        else:
-            y = self.df.loc[:, self.output_labels].values
-            X = torch.tensor(X, dtype=torch.float32)
+        _, y = self._get_data_tensors()
 
         target_idx = self.output_labels.index(self.quantity)
             
@@ -329,15 +290,9 @@ class GDEOptimizer():
             raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
         #print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
 
-        # If normalized, convert bounds to normalized space using stored stats
-        # Require an explicit boolean in the config to avoid surprising truthiness.
-        if 'normalize' not in self.config:
-            raise ValueError("config key 'normalize' not specified. Please set config['normalize'] to True or False.")
-
-        if self.config['normalize'] is True:
+        if self.config.get('normalize_inputs', False):
             means, stds = self._means[self.input_labels], self._stds[self.input_labels]  # feature-only stats
-            # Prevent division by zero
-            stds[stds < 1e-10] = 1.0
+            
             bounds_norm = torch.stack([
                 (raw_bounds[0] - means.values) / stds.values,
                 (raw_bounds[1] - means.values) / stds.values,
@@ -374,7 +329,7 @@ class GDEOptimizer():
             options={}, 
         )
 
-        if self.config['normalize']:
+        if self.config.get('normalize_inputs', False):
             # Denormalize the candidate if optimization was done in normalized space
             x_candidate = next_experiment * stds.values +  means.values
 
@@ -404,12 +359,8 @@ class GDEOptimizer():
                 return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
             else:
                 raise
-            
-        if self.config['normalize']:
-            X, _, _, _, _ = normalize_df_torch(possible_data, self.input_labels, self.output_labels, means=self._means, stds=self._stds)
-        else:
-            X, _ = possible_data.loc[:, self.input_labels].values, possible_data.loc[:, self.output_labels].values
-            X = torch.tensor(X, dtype=torch.float32)
+
+        X, _ = self._get_data_tensors(data=possible_data)
 
         AF = self._get_acquisition_function(predictor)
 
