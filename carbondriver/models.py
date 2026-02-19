@@ -66,7 +66,7 @@ class PhModel(torch.nn.Module):
         self.zlt_sigma = float(zlt_sigma)
         self.current_target = current_target
         # configuration (normalization status is read from here only)
-        self.config = config or {"normalize": False}
+        self.config = config or {"normalize_inputs": False}
         # persistent forward counter to track how many times forward() was called
         self._forward_counter = 0
 
@@ -79,7 +79,7 @@ class PhModel(torch.nn.Module):
         eps = torch.sigmoid(latents[..., [1]])
 
         # If inputs are normalized, denormalize Zero_eps_thickness (feature index 3)
-        if bool(self.config.get("normalize", False)):
+        if bool(self.config.get("normalize_inputs", False)):
             zlt = (x[..., 3] * self.zlt_sigma + self.zlt_mu).view(-1, 1)
         else:
             zlt = x[..., 3].view(-1, 1)

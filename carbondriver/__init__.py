@@ -137,6 +137,12 @@ class GDEOptimizer():
         raise NotImplementedError
     
     def update_data(self, new_data):
+        """
+        Add new experimental data to the dataset (and sort by 'triplet' for now).
+
+        :param new_data: New data to add (pd.Series or pd.DataFrame)
+        :returns: None. Modifies self.df in-place.
+        """
         
         if isinstance(new_data, pd.Series):
             new_data = new_data.to_frame().T
@@ -201,9 +207,6 @@ class GDEOptimizer():
                      n_outputs=n_out,
                  )
 
-                 
-
-            breakpoint()
             stats, model = train_model_ens(X, y, model_factory, DNAME=self.output_dir, i=self.i, num_iter=self.config["num_iter"], plot=self.config["make_plots"])
 
         return model, stats
