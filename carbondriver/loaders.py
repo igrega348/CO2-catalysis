@@ -28,7 +28,7 @@ def load_results_from_folder(folder: Path, plot: bool=False) -> Tuple[pd.DataFra
     df_res_val = df_res[val_cols]
     return df_res_train, df_res_val
 
-def load_data(file: Optional[Path] = None):
+def load_gas_data(file: Optional[Path] = None):
     if file is None:
         file = Path('./Characterization_data.xlsx')
     df = pd.read_excel(file, skiprows=[1], index_col=0)
@@ -56,30 +56,39 @@ def load_data(file: Optional[Path] = None):
     for i in order:
         new_df = pd.concat([new_df, df[df['triplet'] == i]])
     new_df.reset_index(drop=True, inplace=True)
-    df = new_df
-    df = df.drop(columns=['triplet'])
+    #df = new_df
     # normalize
-    means = df.mean()
-    stds = df.std(ddof=0)
-    df_n = (df - means) / stds
-    X = df_n.iloc[:, :-2].values # inputs normalized
-    y = df.iloc[:, -2:].values # outputs (not normalized)
-    print(X.shape, y.shape)
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    return X, y, means, stds, df
+    return df
 
-def normalize_df_torch(df: pd.DataFrame, means: Optional[pd.DataFrame] = None, stds: Optional[pd.DataFrame] = None):
-    if 'triplet' in df.columns:
-        df = df.drop(columns=['triplet'])
-    # normalize
-    if means is None:
-        assert stds is None
-        means = df.mean()
-        stds = df.std(ddof=0)
-    df_n = (df - means) / stds
-    X = df_n.iloc[:, :-2].values # inputs normalized
-    y = df.iloc[:, -2:].values # outputs (not normalized)
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    return X, y, means, stds, df
+def feature_stats(
+    df: pd.DataFrame,
+    all_means: Optional[pd.Series] = None,
+    all_stds: Optional[pd.Series] = None,
+    as_torch: bool = True,
+):
+    """
+    Return per-feature means/stds (excluding the last two target columns).
+
+    Parameters
+    - df: full dataframe with features first and last two columns as targets.
+    - all_means, all_stds: optional precomputed stats across all columns (as returned by normalize_df_torch or load_data).
+    - as_torch: return tensors if True, else pandas Series.
+
+    Notes
+    - If all_means/all_stds are provided, we subset them to feature columns.
+    - Otherwise, we compute stats over feature columns only.
+    """
+    feat_cols = df.columns[:-2]
+    if all_means is not None and all_stds is not None:
+        m = all_means[feat_cols]
+        s = all_stds[feat_cols]
+    else:
+        m = df[feat_cols].mean()
+        s = df[feat_cols].std(ddof=0)
+    if as_torch:
+        return (
+            torch.tensor(m.values, dtype=torch.float32),
+            torch.tensor(s.values, dtype=torch.float32),
+        )
+    else:
+        return m, s

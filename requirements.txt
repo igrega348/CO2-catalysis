@@ -4,3 +4,7 @@ scipy
 matplotlib
 seaborn
 torch
+gpytorch
+botorch
+rich
+openpyxl
