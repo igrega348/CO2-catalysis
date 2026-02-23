@@ -515,7 +515,7 @@ if __name__ == '__main__':
         i = 0
         i_to_max = None
         expected_improvements = [None]*len(chosen_triplets)
-        while len(chosen_triplets)<df_triplet_means.shape[0]:
+        while df_triplet_means[col_n].idxmax() not in chosen_triplets:
             withheld_triplets = df_triplet_means[~df_triplet_means.index.isin(chosen_triplets)]
 
             chosen_df = df[df['triplet'].isin(chosen_triplets)]
@@ -526,7 +526,7 @@ if __name__ == '__main__':
                 print('\r', d, i, ' Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
 
             try:
-                stats, predict = train_model_ens(X, y, MLPModel, DNAME=DNAME, i=i, num_iter=400, plot=False)
+                stats, predict = train_model_ens(X, y, MLPModel, DNAME=DNAME, i=i, num_iter=101, plot=False)
             except torch._C._LinAlgError:
                 print("LinAlgError during ensemble training. System may be underdetermined.")
                 candidate_triplets = withheld_triplets.index.values
@@ -561,10 +561,6 @@ if __name__ == '__main__':
             print("Best FE so far: ", bests)
 
             i += 1
-
-            if maxtrip == df_triplet_means[col_n].idxmax():
-                break
-                
         
         print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
@@ -584,7 +580,7 @@ if __name__ == '__main__':
         i = 0
         i_to_max = None
         expected_improvements = [None]*len(chosen_triplets)
-        while len(chosen_triplets)<df_triplet_means.shape[0]:
+        while df_triplet_means[col_n].idxmax() not in chosen_triplets:
 
             print(f"Run: {d}, Iteration: {i}")
 
@@ -654,11 +650,7 @@ if __name__ == '__main__':
             # ax.set_aspect('equal')
             # plt.show()
 
-            i += 1
-            
-            if maxtrip == df_triplet_means[col_n].idxmax():
-                break
-                
+            i += 1           
         
         print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
@@ -670,7 +662,7 @@ if __name__ == '__main__':
         DNAME = Path(f'./GP_F/GP_F{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
-        chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform')
+        chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform', seed=d)
         bests = df_triplet_means.loc[chosen_triplets][col_n].cummax().tolist()
         print("Starting triplets:", chosen_triplets)
         print("Starting bests:", bests)
@@ -678,7 +670,7 @@ if __name__ == '__main__':
         i = 0
         i_to_max = None
         expected_improvements = [None]*len(chosen_triplets)
-        while len(chosen_triplets)<df_triplet_means.shape[0]:
+        while df_triplet_means[col_n].idxmax() not in chosen_triplets:
             withheld_triplets = df_triplet_means[~df_triplet_means.index.isin(chosen_triplets)]
 
             chosen_df = df[df['triplet'].isin(chosen_triplets)]
@@ -690,7 +682,6 @@ if __name__ == '__main__':
 
             try:
                 stats, predict = train_GP_model(X, y, num_iter=101, DNAME=DNAME, i=i)
-                print(stats)
             except RuntimeError as e:
                 msg = str(e)
                 if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
@@ -727,9 +718,6 @@ if __name__ == '__main__':
             print("Best FE so far: ", bests)
 
             i += 1
-
-            if maxtrip == df_triplet_means[col_n].idxmax():
-                break
                 
         
         print(f"Found max after {i} iterations.")
@@ -742,7 +730,7 @@ if __name__ == '__main__':
         DNAME = Path(f'./GP_Ph_F/GP_Ph_F{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
-        chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform')
+        chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform', seed=d)
         bests = df_triplet_means.loc[chosen_triplets][col_n].cummax().tolist()
         print("Starting triplets:", chosen_triplets)
         print("Starting bests:", bests)
@@ -750,7 +738,7 @@ if __name__ == '__main__':
         i = 0
         i_to_max = None
         expected_improvements = [None]*len(chosen_triplets)
-        while len(chosen_triplets)<df_triplet_means.shape[0]:
+        while df_triplet_means[col_n].idxmax() not in chosen_triplets:
             withheld_triplets = df_triplet_means[~df_triplet_means.index.isin(chosen_triplets)]
 
             chosen_df = df[df['triplet'].isin(chosen_triplets)]
@@ -799,9 +787,6 @@ if __name__ == '__main__':
             print("Best FE so far: ", bests)
 
             i += 1
-
-            if maxtrip == df_triplet_means[col_n].idxmax():
-                break
                 
         print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
