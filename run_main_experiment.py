@@ -493,11 +493,13 @@ if __name__ == '__main__':
     df_triplet_means = df.groupby('triplet').mean()
     df_triplet_max = df.groupby('triplet').max()
 
-    NUM_RUNS = 10
+    NUM_RUNS = 1
     col_n = 'FE (Eth)'
     col_i = 0
 
     REF = "max"  # Set to "min" or "max"
+
+    print(f"Running experiment with reference set to {REF}.")
 
     # ========== MLP ensemble ==========
     print("Running MLP ensemble...")
@@ -506,6 +508,9 @@ if __name__ == '__main__':
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, seed=d)
+        bests = df_triplet_means.loc[chosen_triplets][col_n].cummax().tolist()
+        print("Starting triplets:", chosen_triplets)
+        print("Starting bests:", bests)
 
         i = 0
         i_to_max = None
@@ -518,11 +523,10 @@ if __name__ == '__main__':
 
             if i_to_max is None and abs(y[:,col_i].max().item()-df[col_n].max())<1e-5:
                 i_to_max = i
-            print('\r', d, i, ' Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
+                print('\r', d, i, ' Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
 
             try:
                 stats, predict = train_model_ens(X, y, MLPModel, DNAME=DNAME, i=i, num_iter=400, plot=False)
-                print(stats.tail(5))
             except torch._C._LinAlgError:
                 print("LinAlgError during ensemble training. System may be underdetermined.")
                 candidate_triplets = withheld_triplets.index.values
@@ -533,8 +537,6 @@ if __name__ == '__main__':
                 expected_improvements.append(np.nan)
                 i += 1
                 continue
-                else:
-                    raise
 
             X_test, y_test, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             y_train_pred, _ = predict(X)
@@ -546,15 +548,25 @@ if __name__ == '__main__':
                 reference = torch.tensor(res.max()[0])
             else:
                 reference = torch.tensor(res.min()[0])
+            print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
+            print('Target Scores:', ei)
+            
             maxind = ei.argmax().item()
             expected_improvements.append(ei.max().item())
             maxtrip = test_df.index[maxind]
             chosen_triplets = np.append(chosen_triplets, maxtrip)
+            print("Chosen triplets so far: ", chosen_triplets)
+            bests.append(df_triplet_means.loc[chosen_triplets][col_n].max().item())
+            print("Best FE so far: ", bests)
 
             i += 1
+
+            if maxtrip == df_triplet_means[col_n].idxmax():
+                break
+                
         
-        print('')
+        print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
 
 
@@ -607,7 +619,7 @@ if __name__ == '__main__':
                     i += 1
                     continue
                 else:
-                    raise
+                    raise e
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
@@ -650,7 +662,6 @@ if __name__ == '__main__':
         
         print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
-        breakpoint()
         
     # ========== GP ==========
     print("Running GP...")
@@ -660,6 +671,9 @@ if __name__ == '__main__':
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform')
+        bests = df_triplet_means.loc[chosen_triplets][col_n].cummax().tolist()
+        print("Starting triplets:", chosen_triplets)
+        print("Starting bests:", bests)
 
         i = 0
         i_to_max = None
@@ -672,7 +686,7 @@ if __name__ == '__main__':
 
             if i_to_max is None and abs(y[:,col_i].max().item()-df[col_n].max())<1e-5:
                 i_to_max = i
-            print('\r', d, i, 'Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
+                print('\r', d, i, 'Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
 
             try:
                 stats, predict = train_GP_model(X, y, num_iter=101, DNAME=DNAME, i=i)
@@ -690,7 +704,7 @@ if __name__ == '__main__':
                     i += 1
                     continue
                 else:
-                    raise
+                    raise e
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
@@ -700,15 +714,25 @@ if __name__ == '__main__':
                 reference = torch.tensor(res.max()[0])
             else:
                 reference = torch.tensor(res.min()[0])
+            print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
+            print('Target Scores:', ei)
+            
             maxind = ei.argmax().item()
             expected_improvements.append(ei.max().item())
             maxtrip = test_df.index[maxind]
             chosen_triplets = np.append(chosen_triplets, maxtrip)
+            print("Chosen triplets so far: ", chosen_triplets)
+            bests.append(df_triplet_means.loc[chosen_triplets][col_n].max().item())
+            print("Best FE so far: ", bests)
 
             i += 1
+
+            if maxtrip == df_triplet_means[col_n].idxmax():
+                break
+                
         
-        print('')
+        print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
 
     # ========== GP+Ph ==========
@@ -719,6 +743,9 @@ if __name__ == '__main__':
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform')
+        bests = df_triplet_means.loc[chosen_triplets][col_n].cummax().tolist()
+        print("Starting triplets:", chosen_triplets)
+        print("Starting bests:", bests)
 
         i = 0
         i_to_max = None
@@ -732,8 +759,6 @@ if __name__ == '__main__':
             if i_to_max is None and abs(y[:,col_i].max().item()-df[col_n].max())<1e-5:
                 i_to_max = i
                 print('\r', d, i, 'Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20)
-                break
-            print('\r', d, i, 'Max val:', y[:,col_i].max().item(), 'Target:', df[col_n].max(), 'i_to_max:', i_to_max, ' '*20, end='')
 
             model = lambda: PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233) 
             try:
@@ -751,7 +776,7 @@ if __name__ == '__main__':
                     i += 1
                     continue
                 else:
-                    raise
+                    raise e
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
@@ -761,19 +786,29 @@ if __name__ == '__main__':
                 reference = torch.tensor(res.max()[0])
             else:
                 reference = torch.tensor(res.min()[0])
+            print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
+            print('Target Scores:', ei)
+            
             maxind = ei.argmax().item()
             expected_improvements.append(ei.max().item())
             maxtrip = test_df.index[maxind]
             chosen_triplets = np.append(chosen_triplets, maxtrip)
+            print("Chosen triplets so far: ", chosen_triplets)
+            bests.append(df_triplet_means.loc[chosen_triplets][col_n].max().item())
+            print("Best FE so far: ", bests)
 
             i += 1
-        print('')
+
+            if maxtrip == df_triplet_means[col_n].idxmax():
+                break
+                
+        print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
 
     # ========== Post-processing ==========
     print("Post-processing...")
-    for dname in ['GP_F','GP_Ph_F']:
+    for dname in ['MLP_F', 'Ph_F', 'GP_F', 'GP_Ph_F']:
         steps_to_finish = []
         for p in Path(dname).iterdir():
             if not p.is_dir():
