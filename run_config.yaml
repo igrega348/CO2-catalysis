@@ -1,0 +1,7 @@
+num_runs: 1
+models: ["MLP", "Ph", "GP", "GP+Ph"]
+property_name: 'FE (Eth)'
+EI_reference: "max"
+num_iter: 101
+normalize_inputs: True
+normalize_outputs: False

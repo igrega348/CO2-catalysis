@@ -12,12 +12,14 @@ from carbondriver import GDEOptimizer
 from carbondriver.loaders import load_gas_data
 from typing import Tuple, Optional, Literal
 import torch
+import yaml
+import sys
 
-NUM_RUNS = 100
-MODELS = ['Ph']
-OUTPUT_BASE = Path('_'.join(MODELS) + '_results')
+with open(sys.argv[1]) as f:
+    config = yaml.load(f, Loader=yaml.FullLoader)
+    
+OUTPUT_BASE = Path('_'.join(config["models"]) + '_results')
 OUTPUT_BASE.mkdir(exist_ok=True)
-property_name = 'FE (Eth)'
 
 # Load data once
 df = load_gas_data("paper/Characterization_data.xlsx")
@@ -55,18 +57,18 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         quantity="FE (Eth)",
         maximize=True,
         output_dir=str(run_dir),
-        config={'num_iter': 101, 'make_plots': False, 'normalize_inputs': True, 'normalize_outputs': False}
+        config=config,
     )
     
     # Choose initial triplets
     chosen_triplets_ids = choose_base_inds_numpy(
-        df_triplet_means[property_name].values,
+        df_triplet_means[config["property_name"]].values,
         num_choose=3,
         strategy='uniform',
         seed=run_idx
     ).tolist()
 
-    bests = df_triplet_means.loc[chosen_triplets_ids][property_name].cummax().tolist()
+    bests = df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].cummax().tolist()
     print("Starting triplets:", chosen_triplets_ids)
     print("Starting bests:", bests)
 
@@ -97,12 +99,12 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         chosen_triplets_ids.append(int(best_triplet.name))
 
         print("Chosen triplets so far: ", chosen_triplets_ids)
-        bests.append(df_triplet_means.loc[chosen_triplets_ids][property_name].max().item())
+        bests.append(df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].max().item())
         print("Best FE so far: ", bests)
         
         iteration += 1
 
-        if best_triplet.name == df_triplet_means[property_name].idxmax():
+        if best_triplet.name == df_triplet_means[config["property_name"]].idxmax():
             break
 
     print(f"Found max after {iteration} iterations.")
@@ -135,7 +137,7 @@ def process_runs_mean(model_name: str):
         
         # Calculate cummax FE for this run
         chosen_df['cummax FE'] = df_triplet_means.loc[
-            chosen_df['chosen_triplets'], property_name
+            chosen_df['chosen_triplets'], config["property_name"]
         ].cummax().values
         
         # Add step column (offset by 2 to match old convention)
@@ -155,16 +157,16 @@ def process_runs_mean(model_name: str):
 if __name__ == '__main__':
     torch.manual_seed(0)
     # Run experiments for all models
-    print(f"Running {NUM_RUNS} experiments for each model...")
-    for model in MODELS:
+    print(f"Running {config["num_runs"]} experiments for each model...")
+    for model in config["models"]:
         print(f"Running {model} experiments...")
         
-        for run_idx in range(NUM_RUNS):
+        for run_idx in range(config["num_runs"]):
             print(f"\n{'='*60}")
             print(f"STARTING RUN {run_idx} ({model})")
             print(f"{'='*60}")
             run_active_learning_experiment(model, run_idx)
-            print(f"  {model}: Completed run {run_idx}/{NUM_RUNS - 1}")
+            print(f"  {model}: Completed run {run_idx}/{config['num_runs'] - 1}")
 
     
     print("\nExperiments completed! Generating plots...")
@@ -175,7 +177,7 @@ if __name__ == '__main__':
     fig, ax = plt.subplots(ncols=2, nrows=2, figsize=(10, 8), sharex=True, sharey=True)
     all_data = []
     
-    for i, model_name in enumerate(MODELS):
+    for i, model_name in enumerate(config["models"]):
         _df = process_runs_mean(model_name)
         _df = _df[_df['step'] >= 0]
         
@@ -272,7 +274,7 @@ if __name__ == '__main__':
     print("SUMMARY STATISTICS")
     print("="*60)
     
-    for model_name in MODELS:
+    for model_name in config["models"]:
         steps_to_finish = []
         final_nlls = []
         final_losses = []
@@ -287,7 +289,7 @@ if __name__ == '__main__':
             chosen_df = pd.read_csv(results_file, index_col=0)
             df_triplet_means = df.groupby('triplet').mean()
             chosen_df['cummax FE'] = df_triplet_means.loc[
-                chosen_df['chosen_triplets'], property_name
+                chosen_df['chosen_triplets'], config["property_name"]
             ].cummax().values
             
             # Add step column (offset by 2 due to triplet indexing)

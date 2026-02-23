@@ -40,7 +40,7 @@ class GDEOptimizer():
         elif model_name == 'GP+Ph':
             self.model = MultitaskGPhysModel
         else:
-            raise ValueError
+            raise ValueError(f"Unsupported model_name '{model_name}'. Supported options are 'GP', 'Ph', 'MLP', 'GP+Ph'.")
             
         if aquisition in SUPPORTED_AFs:
             self.aquisition = aquisition
@@ -51,7 +51,7 @@ class GDEOptimizer():
 
         self.output_dir = output_dir
 
-        self.config = config
+        self.config = default_config | config
 
         self.maximize = maximize
 
@@ -94,7 +94,7 @@ class GDEOptimizer():
             self._means = df_clean.mean()
             self._stds = df_clean.std(ddof=0)
                 
-        if self.config.get('normalize_inputs', False):
+        if self.config['normalize_inputs']:
             if self._stds[self.input_labels].min() < 1e-10:
                 raise ValueError("Input feature standard deviation is too small, cannot normalize.")
 
@@ -102,7 +102,7 @@ class GDEOptimizer():
         else:
             X = df_clean.loc[:, self.input_labels]
         
-        if self.config.get('normalize_outputs', False):
+        if self.config['normalize_outputs']:
             if self._stds[self.output_labels].min() < 1e-10:
                 raise ValueError("Output feature standard deviation is too small, cannot normalize.")
 
@@ -170,9 +170,6 @@ class GDEOptimizer():
             # Train GP and return BoTorch-compatible model
             stats, _, model, likelihood = train_GP_model(X, y, num_iter=self.config["num_iter"], DNAME=self.output_dir, i=self.i, plot=self.config["make_plots"])
 
-            # Return BoTorch-compatible wrapper
-            return BoTorchGP(model, likelihood)
-
         elif self.model == MultitaskGPhysModel:
             # GP+Physics: Ph model constructor must be provided to the GP+Ph trainer.
             
@@ -221,8 +218,13 @@ class GDEOptimizer():
         _, y = self._get_data_tensors()
 
         target_idx = self.output_labels.index(self.quantity)
-            
-        best_f = y[:,target_idx].max()
+
+        if self.config['EI_reference'] == "max":
+            best_f = y[:, target_idx].max()
+        elif self.config['EI_reference'] == "min":
+            best_f = y[:, target_idx].min()
+        else:
+            raise ValueError(f"Unsupported EI_reference {self.config['EI_reference']}, expected 'max' or 'min'")
         
         if self.aquisition == "EI":
             with warnings.catch_warnings():
@@ -293,7 +295,7 @@ class GDEOptimizer():
             raise ValueError(f"Quantity '{self.quantity}' not found in output columns {self.output_labels}")
         #print(f"[step] optimizing target column index (target_idx): {target_idx} for quantity '{self.quantity}'")
 
-        if self.config.get('normalize_inputs', False):
+        if self.config['normalize_inputs']:
             means, stds = self._means[self.input_labels], self._stds[self.input_labels]  # feature-only stats
             
             bounds_norm = torch.stack([
@@ -332,9 +334,9 @@ class GDEOptimizer():
             options={}, 
         )
 
-        if self.config.get('normalize_inputs', False):
+        if self.config['normalize_inputs']:
             # Denormalize the candidate if optimization was done in normalized space
-            x_candidate = next_experiment * stds.values +  means.values
+            x_candidate = next_experiment * stds.values + means.values
 
         else:
             x_candidate = next_experiment

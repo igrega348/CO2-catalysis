@@ -3,4 +3,5 @@ default_config = {
     "make_plots": False,
     "normalize_inputs": True,
     "normalize_outputs": True,
+    "EI_reference": "max",
 }
