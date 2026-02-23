@@ -56,8 +56,8 @@ def load_data(file: Optional[Path] = None):
     for i in order:
         new_df = pd.concat([new_df, df[df['triplet'] == i]])
     new_df.reset_index(drop=True, inplace=True)
-    df = new_df
-    df = df.drop(columns=['triplet'])
+    #df = new_df
+    #df = df.drop(columns=['triplet'])
     # normalize
     means = df.mean()
     stds = df.std(ddof=0)
