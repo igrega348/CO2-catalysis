@@ -15,15 +15,6 @@ import torch
 import yaml
 import sys
 
-with open(sys.argv[1]) as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
-    
-OUTPUT_BASE = Path('_'.join(config["models"]) + '_results')
-OUTPUT_BASE.mkdir(exist_ok=True)
-
-# Load data once
-df = load_gas_data("paper/Characterization_data.xlsx")
-
 def choose_base_inds_numpy(y: np.ndarray, num_choose: int, how: Literal['max','min'] = 'max', strategy: Literal['uniform','skewed'] = 'uniform', seed: Optional[int] = None):
     ind = np.argsort(y)
     N = y.shape[0]
@@ -155,21 +146,34 @@ def process_runs_mean(model_name: str):
 # ============================================================================
 
 if __name__ == '__main__':
-    torch.manual_seed(0)
-    # Run experiments for all models
-    print(f"Running {config["num_runs"]} experiments for each model...")
-    for model in config["models"]:
-        print(f"Running {model} experiments...")
-        
-        for run_idx in range(config["num_runs"]):
-            print(f"\n{'='*60}")
-            print(f"STARTING RUN {run_idx} ({model})")
-            print(f"{'='*60}")
-            run_active_learning_experiment(model, run_idx)
-            print(f"  {model}: Completed run {run_idx}/{config['num_runs'] - 1}")
 
+    with open(sys.argv[1]) as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
     
-    print("\nExperiments completed! Generating plots...")
+    OUTPUT_BASE = Path('_'.join(config["models"]) + '_results')
+    OUTPUT_BASE.mkdir(exist_ok=True)
+
+    # Load data once
+    df = load_gas_data("paper/Characterization_data.xlsx")
+
+    if not config["use_existing_results"]:
+        
+        print("Running new experiments...")
+        torch.manual_seed(config["torch_seed"])
+        
+        # Run experiments for all models
+        print(f"Running {config["num_runs"]} experiments for each model...")
+        for model in config["models"]:
+            print(f"Running {model} experiments...")
+            
+            for run_idx in range(config["num_runs"]):
+                print(f"\n{'='*60}")
+                print(f"STARTING RUN {run_idx} ({model})")
+                print(f"{'='*60}")
+                run_active_learning_experiment(model, run_idx)
+                print(f"  {model}: Completed run {run_idx}/{config['num_runs'] - 1}")
+                
+        print("\nExperiments completed! Generating plots...")
     
     # ========================================================================
     # Plot 1: 2x2 grid - one subplot per model
@@ -278,7 +282,7 @@ if __name__ == '__main__':
         steps_to_finish = []
         final_nlls = []
         final_losses = []
-        for run_dir in OUTPUT_BASE.iterdir():
+        for run_dir in OUTPUT_BASE.glob(model_name + '_run_*/'):
             if not run_dir.is_dir() or not run_dir.name.startswith(model_name):
                 continue
             
@@ -313,7 +317,7 @@ if __name__ == '__main__':
                 step_to_max = filtered['step'].iloc[0]
                 # Record steps to finish
                 steps_to_finish.append(step_to_max)
-        
+                
         if steps_to_finish:
             sf = np.array(steps_to_finish)
             sf[sf < 0] = 0

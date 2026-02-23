@@ -5,3 +5,5 @@ EI_reference: "max"
 num_iter: 101
 normalize_inputs: True
 normalize_outputs: False
+torch_seed: 0
+use_existing_results: False
