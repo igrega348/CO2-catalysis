@@ -150,7 +150,8 @@ if __name__ == '__main__':
     with open(sys.argv[1]) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     
-    OUTPUT_BASE = Path('_'.join(config["models"]) + '_results')
+    OUTPUT_BASE = Path(config["run_name"] + "_" + '_'.join(config["models"]) + '_results')
+    print(OUTPUT_BASE)
     OUTPUT_BASE.mkdir(exist_ok=True)
 
     # Load data once
@@ -162,7 +163,7 @@ if __name__ == '__main__':
         torch.manual_seed(config["torch_seed"])
         
         # Run experiments for all models
-        print(f"Running {config["num_runs"]} experiments for each model...")
+        print(f"Running {config['num_runs']} experiments for each model...")
         for model in config["models"]:
             print(f"Running {model} experiments...")
             

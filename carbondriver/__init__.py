@@ -96,7 +96,8 @@ class GDEOptimizer():
                 
         if self.config['normalize_inputs']:
             if self._stds[self.input_labels].min() < 1e-10:
-                raise ValueError("Input feature standard deviation is too small, cannot normalize.")
+                print("Note: Input feature standard deviation is < 1e-10, normalizing with 1")
+                self._stds.loc[self._stds.index.isin(self.input_labels) & (self._stds < 1e-10)] = 1
 
             X = (df_clean.loc[:, self.input_labels] - self._means[self.input_labels]) / self._stds[self.input_labels]
         else:
@@ -104,7 +105,8 @@ class GDEOptimizer():
         
         if self.config['normalize_outputs']:
             if self._stds[self.output_labels].min() < 1e-10:
-                raise ValueError("Output feature standard deviation is too small, cannot normalize.")
+                print("Note: Output feature standard deviation is < 1e-10, normalizing with 1")
+                self._stds.loc[self._stds.index.isin(self.output_labels) & (self._stds < 1e-10)] = 1
 
             y = (df_clean.loc[:, self.output_labels] - self._means[self.output_labels]) / self._stds[self.output_labels]
         else:
@@ -157,7 +159,7 @@ class GDEOptimizer():
         Train and return the new predictor based on the new data.
         Returns: (model, stats) tuple where stats is a DataFrame with training metrics.
         '''
-        X, y = self._get_data_tensors()
+        X, y = self._get_data_tensors(update_stats=True)
         
         # Direct access to precomputed stats for PhModel
         mu = float(self._means['Zero_eps_thickness'])
@@ -359,12 +361,14 @@ class GDEOptimizer():
             return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
         except RuntimeError as e:
             msg = str(e)
-            if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
+            if ("You must train on the training inputs" in msg
+                or "train_inputs cannot be None" in msg
+                or "cholesky_cpu" in msg):
                 print("RuntimeError during GP training. Treating as underdetermined.")
                 return torch.nan, torch.randint(len(possible_data)-1,(1,)).squeeze(), {}
             else:
                 raise
-
+            
         X, _ = self._get_data_tensors(data=possible_data)
 
         AF = self._get_acquisition_function(predictor)
