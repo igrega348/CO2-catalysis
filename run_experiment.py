@@ -167,7 +167,7 @@ if __name__ == '__main__':
         for model in config["models"]:
             print(f"Running {model} experiments...")
             
-            for run_idx in range(config["num_runs"]):
+            for run_idx in config.get("runs", range(config["num_runs"])):
                 print(f"\n{'='*60}")
                 print(f"STARTING RUN {run_idx} ({model})")
                 print(f"{'='*60}")
