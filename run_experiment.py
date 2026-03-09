@@ -35,12 +35,14 @@ def choose_base_inds_numpy(y: np.ndarray, num_choose: int, how: Literal['max','m
 def run_active_learning_experiment(model_name: str, run_idx: int):
     """Run a single active learning experiment for the given model."""
     
+    print(f"  [Step 1/3] Preparing data for {model_name} run {run_idx}...")
     # Reset df for this run
     df_triplet_means = df.groupby('triplet').mean()
     
     run_dir = OUTPUT_BASE / f'{model_name}_run_{run_idx:03d}'
     run_dir.mkdir(exist_ok=True, parents=True)
     
+    print(f"  [Step 2/3] Initializing {model_name} optimizer...")
     # Initialize optimizer
     gde = GDEOptimizer(
         model_name=model_name,
@@ -52,6 +54,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     )
     
     # Choose initial triplets
+    print(f"  [Step 3/3] Selecting initial triplets...")
     chosen_triplets_ids = choose_base_inds_numpy(
         df_triplet_means[config["property_name"]].values,
         num_choose=3,
@@ -60,8 +63,8 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     ).tolist()
 
     bests = df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].cummax().tolist()
-    print("Starting triplets:", chosen_triplets_ids)
-    print("Starting bests:", bests)
+    print(f"    Starting triplets: {chosen_triplets_ids}")
+    print(f"    Starting best FE values: {[f'{b:.4f}' for b in bests]}")
 
     # Track results
     expected_improvements = [None] * len(chosen_triplets_ids)
@@ -75,8 +78,9 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     # Active learning loop
     iteration = 0
     
+    print(f"\n  Starting active learning loop with {len(withheld_df)} candidates...")
     while len(withheld_df) > 0:
-        print(f"Run: {run_idx}, Iteration: {iteration}")
+        print(f"  Run {run_idx}, Iteration {iteration}: Evaluating acquisition function...")
         # Evaluate acquisition function
         best_ei, best_row_idx, metrics = gde.step_within_data(train_df, withheld_df, return_metrics=True)
         best_triplet = withheld_df.iloc[int(best_row_idx)]
@@ -89,16 +93,17 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         loss_values.append(metrics.get('loss', None))
         chosen_triplets_ids.append(int(best_triplet.name))
 
-        print("Chosen triplets so far: ", chosen_triplets_ids)
-        bests.append(df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].max().item())
-        print("Best FE so far: ", bests)
+        current_best = df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].max().item()
+        bests.append(current_best)
+        print(f"    ✓ Selected triplet {int(best_triplet.name)}, Best FE: {current_best:.4f}, EI: {best_ei:.6f}, Remaining candidates: {len(withheld_df)}")
         
         iteration += 1
 
         if best_triplet.name == df_triplet_means[config["property_name"]].idxmax():
+            print(f"    ✓ Found global optimum! Stopping early.")
             break
 
-    print(f"Found max after {iteration} iterations.")
+    print(f"  ✓ Run {run_idx} completed in {iteration} iterations.\n")
     # Save results
     results_df = pd.DataFrame({
         'chosen_triplets': chosen_triplets_ids,
@@ -107,15 +112,18 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
         'loss': loss_values
     })
     results_df.to_csv(run_dir / 'chosen_triplets.csv')
+    print(f"  Results saved to {run_dir / 'chosen_triplets.csv'}")
     
     return run_dir
 
 def process_runs_mean(model_name: str):
     """Process all runs for a given model and return aggregated DataFrame."""
+    print(f"  Processing results for {model_name}...")
     all_df = []
+    run_count = 0
     
-    for run_dir in OUTPUT_BASE.iterdir():
-        if not run_dir.is_dir() or not run_dir.name.startswith(model_name):
+    for run_dir in OUTPUT_BASE.glob(model_name + '_run_*/'):
+        if not run_dir.is_dir():
             continue
         
         results_file = run_dir / 'chosen_triplets.csv'
@@ -138,7 +146,9 @@ def process_runs_mean(model_name: str):
         chosen_df['model'] = model_name
         
         all_df.append(chosen_df)
+        run_count += 1
     
+    print(f"    ✓ Loaded {run_count} runs for {model_name}")
     return pd.concat(all_df, axis=0) if all_df else pd.DataFrame()
 
 # ============================================================================
@@ -147,42 +157,60 @@ def process_runs_mean(model_name: str):
 
 if __name__ == '__main__':
 
+    print("="*70)
+    print("ACTIVE LEARNING EXPERIMENT SUITE")
+    print("="*70)
+    
+    print("\n[1/6] Loading configuration...")
     with open(sys.argv[1]) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     
-    OUTPUT_BASE = Path(config["run_name"] + "_" + '_'.join(config["models"]) + '_results')
-    print(OUTPUT_BASE)
+    OUTPUT_BASE = Path(config["run_name"])
+    print(f"  Output directory: {OUTPUT_BASE}")
     OUTPUT_BASE.mkdir(exist_ok=True)
 
     # Load data once
+    print("[2/6] Loading experimental data...")
     df = load_gas_data("paper/Characterization_data.xlsx")
-
+    print(f"  ✓ Loaded {len(df)} data points")
+    
     if not config["use_existing_results"]:
         
-        print("Running new experiments...")
+        print("\n[3/6] Running new experiments...")
         torch.manual_seed(config["torch_seed"])
+        print(f"  Set torch seed to {config['torch_seed']}")
         
         # Run experiments for all models
-        print(f"Running {config['num_runs']} experiments for each model...")
+        total_runs = len(config["models"]) * len(list(config.get("runs", range(config["num_runs"]))))
+        run_num = 0
+        
         for model in config["models"]:
-            print(f"Running {model} experiments...")
+            print(f"\n  → Starting experiments for {model.upper()}...")
             
             for run_idx in config.get("runs", range(config["num_runs"])):
-                print(f"\n{'='*60}")
-                print(f"STARTING RUN {run_idx} ({model})")
-                print(f"{'='*60}")
+                run_num += 1
+                print(f"\n{'='*70}")
+                print(f"RUN {run_num}/{total_runs}: {model.upper()} (Seed {run_idx})")
+                print(f"{'='*70}")
                 run_active_learning_experiment(model, run_idx)
-                print(f"  {model}: Completed run {run_idx}/{config['num_runs'] - 1}")
+                print(f"✓ Completed {model} run {run_idx+1}/{config['num_runs']}")
                 
-        print("\nExperiments completed! Generating plots...")
+        print("\n" + "="*70)
+        print("✓ All experiments completed!")
+        print("="*70)
+        print("\nGenerating plots...")
+    else:
+        print("\n[3/6] Using existing results (use_existing_results=True)")
     
     # ========================================================================
     # Plot 1: 2x2 grid - one subplot per model
     # ========================================================================
+    print("\n[4/6] Generating 2x2 grid plot...")
     fig, ax = plt.subplots(ncols=2, nrows=2, figsize=(10, 8), sharex=True, sharey=True)
     all_data = []
     
     for i, model_name in enumerate(config["models"]):
+        print(f"  Processing subplot for {model_name}...")
         _df = process_runs_mean(model_name)
         _df = _df[_df['step'] >= 0]
         
@@ -202,12 +230,13 @@ if __name__ == '__main__':
     
     fig.tight_layout()
     fig.savefig(OUTPUT_BASE / 'cummax_FE_grid.png', dpi=300, bbox_inches='tight')
-    print(f"Saved: {OUTPUT_BASE / 'cummax_FE_grid.png'}")
+    print(f"  ✓ Saved: {OUTPUT_BASE / 'cummax_FE_grid.png'}")
     plt.close()
     
     # ========================================================================
     # Plot 2: Combined - all models on one plot
     # ========================================================================
+    print("\n[5/6] Generating combined model comparison plot...")
     all_df = pd.concat(all_data, axis=0)
     
     plt.figure(figsize=(3.75, 3))
@@ -224,7 +253,7 @@ if __name__ == '__main__':
     plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig(OUTPUT_BASE / 'active_learning_combined.png', dpi=300, bbox_inches='tight')
-    print(f"Saved: {OUTPUT_BASE / 'active_learning_combined.png'}")
+    print(f"  ✓ Saved: {OUTPUT_BASE / 'active_learning_combined.png'}")
     plt.close()
     
     # Reset index to avoid duplicate label issues in seaborn
@@ -234,6 +263,7 @@ if __name__ == '__main__':
     # Plot 3: NLL over steps (training quality metric)
     # ========================================================================
     if 'nll' in all_df.columns:
+        print("  Generating NLL vs step plot...")
         plt.figure(figsize=(5, 4))
         sns.lineplot(
             data=all_df[all_df['step'] >= 0], 
@@ -248,13 +278,14 @@ if __name__ == '__main__':
         plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
         plt.savefig(OUTPUT_BASE / 'nll_over_steps.png', dpi=300, bbox_inches='tight')
-        print(f"Saved: {OUTPUT_BASE / 'nll_over_steps.png'}")
+        print(f"  ✓ Saved: {OUTPUT_BASE / 'nll_over_steps.png'}")
         plt.close()
     
     # ========================================================================
     # Plot 4: Loss (MSE) over steps (training fit quality)
     # ========================================================================
     if 'loss' in all_df.columns:
+        print("  Generating Loss vs step plot...")
         plt.figure(figsize=(5, 4))
         sns.lineplot(
             data=all_df[all_df['step'] >= 0], 
@@ -269,20 +300,24 @@ if __name__ == '__main__':
         plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
         plt.savefig(OUTPUT_BASE / 'loss_over_steps.png', dpi=300, bbox_inches='tight')
-        print(f"Saved: {OUTPUT_BASE / 'loss_over_steps.png'}")
+        print(f"  ✓ Saved: {OUTPUT_BASE / 'loss_over_steps.png'}")
         plt.close()
     
     # ========================================================================
     # Summary statistics
     # ========================================================================
-    print("\n" + "="*60)
+    print("\n[6/6] Computing summary statistics...")
+    print("\n" + "="*70)
     print("SUMMARY STATISTICS")
-    print("="*60)
+    print("="*70)
     
     for model_name in config["models"]:
+        print(f"\n{model_name.upper()}:")
         steps_to_finish = []
         final_nlls = []
         final_losses = []
+        run_count = 0
+        
         for run_dir in OUTPUT_BASE.glob(model_name + '_run_*/'):
             if not run_dir.is_dir() or not run_dir.name.startswith(model_name):
                 continue
@@ -291,6 +326,7 @@ if __name__ == '__main__':
             if not results_file.exists():
                 continue
             
+            run_count += 1
             chosen_df = pd.read_csv(results_file, index_col=0)
             df_triplet_means = df.groupby('triplet').mean()
             chosen_df['cummax FE'] = df_triplet_means.loc[
@@ -326,12 +362,16 @@ if __name__ == '__main__':
             std_steps = np.std(sf)
             accel_factor = 13 / mean_steps if mean_steps > 0 else np.inf
             
-            print(f"\n{model_name}:")
+            print(f"  Runs analyzed: {run_count}")
             print(f"  Mean steps to FE=0.245: {mean_steps:.2f} ± {std_steps:.2f}")
             if final_losses:
                 print(f"  Final MSE (loss): {np.mean(final_losses):.4f} ± {np.std(final_losses):.4f}")
             if final_nlls:
                 print(f"  Final NLL: {np.mean(final_nlls):.4f} ± {np.std(final_nlls):.4f}")
             print(f"  Acceleration factor: {accel_factor:.2f}x")
+        else:
+            print(f"  No data available for {model_name}")
     
-    print("\nDone!")
+    print("\n" + "="*70)
+    print("✓ Analysis complete!")
+    print("="*70 + "\n")

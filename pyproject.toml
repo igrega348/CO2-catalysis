@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "carbondriver"
 description = "Physics based active learning tools for CO2 reduction experiments"
-dependencies = ["torch", "gpytorch", "pandas", "seaborn", "rich", "openpyxl", "botorch"]
+dependencies = ["torch", "gpytorch", "pandas", "seaborn", "rich", "openpyxl", "botorch", "pyyaml"]
 version = "0.1.0"
 authors = [
   { name="Ivan Grega", email="grega.ivan@gmail.com" },
