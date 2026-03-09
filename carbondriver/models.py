@@ -6,8 +6,9 @@ from botorch.models.gpytorch import GPyTorchModel
 from gpytorch.distributions import MultitaskMultivariateNormal
 from botorch.models.ensemble import EnsembleModel
 
+
 class PhModel(torch.nn.Module):
-    '''
+    """
     Model for predicting the Faradaic efficiency of CO and C2H4 on a catalyst.
 
     The model is a neural network that takes in the following inputs:
@@ -21,8 +22,8 @@ class PhModel(torch.nn.Module):
 
     Values of particle radius r and porosity ε are in
     sensible ranges (40 nm < r < 65 nm, 0.5 < ε < 0.8).
-    '''
-    
+    """
+
     def __init__(
         self,
         zlt_mu: float,
@@ -51,19 +52,21 @@ class PhModel(torch.nn.Module):
             torch.nn.Linear(ldim, ldim),
             torch.nn.ReLU(),
             torch.nn.Dropout(dropout),
-            torch.nn.Linear(ldim, 6)
+            torch.nn.Linear(ldim, 6),
         )
 
         erc = gde_multi.electrode_reaction_kinetics | {}
-        erc['i_0_CO'] = torch.nn.parameter.Parameter(torch.tensor(erc['i_0_CO']))
-        erc['i_0_C2H4'] = torch.nn.parameter.Parameter(torch.tensor(erc['i_0_C2H4']))
-        erc['i_0_H2b'] = torch.nn.parameter.Parameter(torch.tensor(erc['i_0_H2b']))
-        erc['alpha_CO'] = torch.nn.parameter.Parameter(torch.tensor(erc['alpha_CO']))
-        erc['alpha_C2H4'] = torch.nn.parameter.Parameter(torch.tensor(erc['alpha_C2H4']))
-        erc['alpha_H2b'] = torch.nn.parameter.Parameter(torch.tensor(erc['alpha_H2b']))
+        erc["i_0_CO"] = torch.nn.parameter.Parameter(torch.tensor(erc["i_0_CO"]))
+        erc["i_0_C2H4"] = torch.nn.parameter.Parameter(torch.tensor(erc["i_0_C2H4"]))
+        erc["i_0_H2b"] = torch.nn.parameter.Parameter(torch.tensor(erc["i_0_H2b"]))
+        erc["alpha_CO"] = torch.nn.parameter.Parameter(torch.tensor(erc["alpha_CO"]))
+        erc["alpha_C2H4"] = torch.nn.parameter.Parameter(
+            torch.tensor(erc["alpha_C2H4"])
+        )
+        erc["alpha_H2b"] = torch.nn.parameter.Parameter(torch.tensor(erc["alpha_H2b"]))
         self.ph_model = gde_multi.System(
-            diffusion_coefficients=gde_multi.diffusion_coefficients, 
-            salting_out_exponents=gde_multi.salting_out_exponents, 
+            diffusion_coefficients=gde_multi.diffusion_coefficients,
+            salting_out_exponents=gde_multi.salting_out_exponents,
             electrode_reaction_kinetics=erc,
             electrode_reaction_potentials=gde_multi.electrode_reaction_potentials,
             chemical_reaction_rates=gde_multi.chemical_reaction_rates,
@@ -81,7 +84,7 @@ class PhModel(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Predict Faradaic efficiency for given experimental parameters.
-        
+
         :param x: input features of shape (batch, 5) [AgCu Ratio, Naf vol, Sust vol, Zero_eps_thickness, Catalyst mass loading]
         :returns: predicted FE values of shape (batch, 2) [FE(C2H4), FE(CO)]
         """
@@ -100,17 +103,17 @@ class PhModel(torch.nn.Module):
         # Prevent division by zero in L calculation
         L = zlt / (1 - eps)
         K_dl_factor = torch.exp(latents[..., [2]])
-        thetas = self.softmax(2*latents[..., 3:])
+        thetas = self.softmax(2 * latents[..., 3:])
         # CO activation must not be zero
-        theta0 = thetas[...,[0]]
-        theta1 = thetas[...,[1]]
-        theta2 = thetas[...,[2]]
-        thetas = {
-            'CO': theta0,
-            'C2H4': theta1,
-            'H2b': theta2
-        }
-        gdl_mass_transfer_coefficient = K_dl_factor * self.ph_model.bruggeman(gde_multi.diffusion_coefficients['CO2'], eps) / r
+        theta0 = thetas[..., [0]]
+        theta1 = thetas[..., [1]]
+        theta2 = thetas[..., [2]]
+        thetas = {"CO": theta0, "C2H4": theta1, "H2b": theta2}
+        gdl_mass_transfer_coefficient = (
+            K_dl_factor
+            * self.ph_model.bruggeman(gde_multi.diffusion_coefficients["CO2"], eps)
+            / r
+        )
         solution = self.ph_model.solve_current(
             i_target=self.current_target,
             eps=eps,
@@ -119,16 +122,19 @@ class PhModel(torch.nn.Module):
             thetas=thetas,
             gdl_mass_transfer_coeff=gdl_mass_transfer_coefficient,
             grid_size=1000,
-            voltage_bounds=(-1.25,0)
+            voltage_bounds=(-1.25, 0),
         )
 
-        out = torch.cat([solution['fe_c2h4'], solution['fe_co']], dim=-1)
+        out = torch.cat([solution["fe_c2h4"], solution["fe_co"]], dim=-1)
         return out
 
 
 class MLPModel(torch.nn.Module):
     """Multi-layer perceptron for regression or multitask prediction."""
-    def __init__(self, n_inputs: int, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64) -> None:
+
+    def __init__(
+        self, n_inputs: int, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64
+    ) -> None:
         """
         :param n_inputs: number of input features
         :param n_outputs: number of output targets (e.g. 1 for single objective, 2 for FE(Eth)/FE(CO), etc.)
@@ -154,8 +160,10 @@ class MLPModel(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(x)
 
+
 class EnsPredictor(EnsembleModel):
     """Wraps ensemble models for BoTorch-compatible shape handling."""
+
     def __init__(self, model_input: torch.nn.Module) -> None:
         """
         :param model_input: ensemble model to wrap
@@ -178,7 +186,7 @@ class EnsPredictor(EnsembleModel):
         # Handle different output dimensions
         if model_output.dim() == 3:
             # Output is [ensemble, batch, features] -> [batch, ensemble, features]
-            result = model_output.permute((1, 0, 2)).unsqueeze(2) 
+            result = model_output.permute((1, 0, 2)).unsqueeze(2)
         elif model_output.dim() == 4:
             # Output is [ensemble, batch, features, extra] -> [batch, ensemble, features, extra]
             result = model_output.permute((2, 0, 1, 3))
@@ -191,6 +199,7 @@ class EnsPredictor(EnsembleModel):
 
 class BoTorchGP(GPyTorchModel):
     """Wrapper for GPyTorch models to work with BoTorch acquisition functions."""
+
     def __init__(self, model: gpytorch.models.ExactGP) -> None:
         """
         :param model: GPyTorch ExactGP model
@@ -206,9 +215,16 @@ class BoTorchGP(GPyTorchModel):
             X_in = x  # already (batch, d)
         return self.model(X_in)
 
+
 class MultitaskGPModel(gpytorch.models.ExactGP):
     """Multitask Gaussian Process for joint prediction of two outputs."""
-    def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor, likelihood: gpytorch.likelihoods.Likelihood) -> None:
+
+    def __init__(
+        self,
+        train_x: torch.Tensor,
+        train_y: torch.Tensor,
+        likelihood: gpytorch.likelihoods.Likelihood,
+    ) -> None:
         """
         :param train_x: training inputs of shape (n, d)
         :param train_y: training targets of shape (n, 2)
@@ -222,16 +238,23 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
         self.num_outputs = 2
-    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultitaskMultivariateNormal:
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> gpytorch.distributions.MultitaskMultivariateNormal:
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
+
 
 class MyMean(gpytorch.means.Mean):
     """
     Mean function for physics-informed GP using a neural network model.
     """
-    def __init__(self, model: Optional[torch.nn.Module] = None, freeze_model: bool = False) -> None:
+
+    def __init__(
+        self, model: Optional[torch.nn.Module] = None, freeze_model: bool = False
+    ) -> None:
         """
         :param model: optional model to use as mean function (default: PhModel)
         :param freeze_model: whether to freeze model parameters and remove dropout
@@ -240,17 +263,23 @@ class MyMean(gpytorch.means.Mean):
         if model is not None:
             self.model = model
         else:
-            print('No model provided, using default PhModel with placeholder parameters.')
-            self.model = PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233)
-        
+            print(
+                "No model provided, using default PhModel with placeholder parameters."
+            )
+            self.model = PhModel(
+                zlt_mu_stds=(means["Zero_eps_thickness"], stds["Zero_eps_thickness"]),
+                current_target=233,
+            )
+
         if freeze_model:
+
             def remove_dropout(m: torch.nn.Module):
                 for child in m.children():
                     if isinstance(child, torch.nn.Dropout):
                         child.p = 0
                     else:
                         remove_dropout(child)
-            
+
             for param in self.model.parameters():
                 param.requires_grad = False
             remove_dropout(self.model)
@@ -258,15 +287,24 @@ class MyMean(gpytorch.means.Mean):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Evaluate mean function.
-        
+
         :param x: input tensor
         :returns: mean function output squeezed to 1D
         """
         return self.model(x).squeeze()
-    
+
+
 class MultitaskGPhysModel(gpytorch.models.ExactGP):
     """Combines physics-informed mean (PhModel) with GP covariance."""
-    def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor, likelihood: gpytorch.likelihoods.Likelihood, model: Optional[torch.nn.Module] = None, freeze_model: bool = False) -> None:
+
+    def __init__(
+        self,
+        train_x: torch.Tensor,
+        train_y: torch.Tensor,
+        likelihood: gpytorch.likelihoods.Likelihood,
+        model: Optional[torch.nn.Module] = None,
+        freeze_model: bool = False,
+    ) -> None:
         """
         :param train_x: training inputs of shape (n, d)
         :param train_y: training targets of shape (n, 2)
@@ -280,7 +318,9 @@ class MultitaskGPhysModel(gpytorch.models.ExactGP):
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
 
-    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultitaskMultivariateNormal:
+    def forward(
+        self, x: torch.Tensor
+    ) -> gpytorch.distributions.MultitaskMultivariateNormal:
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
