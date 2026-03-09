@@ -16,6 +16,7 @@ import pickle as pkl
 from analytical_models.gde_multi import System
 from analytical_models import gde_multi
 from analytical_models.loaders import load_data, normalize_df_torch
+import sys
 
 class PhModel(torch.nn.Module):
     def __init__(
@@ -493,18 +494,22 @@ if __name__ == '__main__':
     df_triplet_means = df.groupby('triplet').mean()
     df_triplet_max = df.groupby('triplet').max()
 
-    NUM_RUNS = 1
+    NUM_RUNS = 100
     col_n = 'FE (Eth)'
     col_i = 0
 
-    REF = "max"  # Set to "min" or "max"
+    REF = sys.argv[1]  # Set to "min" or "max"
 
     print(f"Running experiment with reference set to {REF}.")
+
+    # Dictionary to store exceptions
+    exceptions_dict = {}
 
     # ========== MLP ensemble ==========
     print("Running MLP ensemble...")
     for d in range(NUM_RUNS):
-        DNAME = Path(f'./MLP_F/MLP_F{d}')
+        exceptions_dict[('MLP', d)] = []
+        DNAME = Path(f'./MLP_{REF}/MLP_{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, seed=d)
@@ -527,8 +532,9 @@ if __name__ == '__main__':
 
             try:
                 stats, predict = train_model_ens(X, y, MLPModel, DNAME=DNAME, i=i, num_iter=101, plot=False)
-            except torch._C._LinAlgError:
-                print("LinAlgError during ensemble training. System may be underdetermined.")
+            except Exception as e:
+                print(f"Exception during MLP training at run {d}, step {i}: {type(e).__name__}: {str(e)}")
+                exceptions_dict[('MLP', d)].append({'step': i, 'exception': type(e).__name__, 'message': str(e)})
                 candidate_triplets = withheld_triplets.index.values
                 if len(candidate_triplets) == 0:
                     break
@@ -545,9 +551,9 @@ if __name__ == '__main__':
             # res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']}).groupby('triplet').mean()
             res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']})
             if REF == "max":
-                reference = torch.tensor(res.max()[0])
+                reference = torch.tensor(res["y"].max())
             else:
-                reference = torch.tensor(res.min()[0])
+                reference = torch.tensor(res["y"].min())
             print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
             print('Target Scores:', ei)
@@ -570,7 +576,8 @@ if __name__ == '__main__':
     print("Running Ph ensemble...")
     ds = range(NUM_RUNS)
     for d in ds:
-        DNAME = Path(f'./Ph_F/Ph_F{d}')
+        exceptions_dict[('Ph', d)] = []
+        DNAME = Path(f'./Ph_{REF}/Ph_{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform', seed=d)
@@ -592,8 +599,9 @@ if __name__ == '__main__':
             model = lambda: PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233, dropout=0)
             try:
                 stats, predict = train_model_ens(X, y, model, num_iter=101, DNAME=DNAME, i=i)
-            except torch._C._LinAlgError:
-                print("LinAlgError during ensemble training. System may be underdetermined.")
+            except Exception as e:
+                print(f"Exception during Ph training at run {d}, step {i}: {type(e).__name__}: {str(e)}")
+                exceptions_dict[('Ph', d)].append({'step': i, 'exception': type(e).__name__, 'message': str(e)})
                 candidate_triplets = withheld_triplets.index.values
                 if len(candidate_triplets) == 0:
                     break
@@ -602,31 +610,30 @@ if __name__ == '__main__':
                 expected_improvements.append(np.nan)
                 i += 1
                 continue
-            except RuntimeError as e:
-                msg = str(e)
-                if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
-                    print("RuntimeError during GP training. Treating as underdetermined.")
-                    candidate_triplets = withheld_triplets.index.values
-                    if len(candidate_triplets) == 0:
-                        break
-                    fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
-                    chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
-                    expected_improvements.append(np.nan)
-                    i += 1
-                    continue
-                else:
-                    raise e
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
             # res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']}).groupby('triplet').mean()
             res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']})
             if REF == "max":
-                reference = torch.tensor(res.max()[0])
+                reference = torch.tensor(res["y"].max())
             else:
-                reference = torch.tensor(res.min()[0])
+                reference = torch.tensor(res["y"].min())
             print("Reference FE:", reference.item())
-            ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
+            try:
+                ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
+            except Exception as e:
+                print(f"Exception during ei at run {d}, step {i}: {type(e).__name__}: {str(e)}")
+                exceptions_dict[('Ph', d)].append({'step': i, 'exception': type(e).__name__, 'message': "EI ERROR" + str(e)})
+                candidate_triplets = withheld_triplets.index.values
+                if len(candidate_triplets) == 0:
+                    break
+                fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
+                chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
+                expected_improvements.append(np.nan)
+                i += 1
+                continue
+            
             print('Target Scores:', ei)
 
             maxind = ei.argmax().item()
@@ -659,7 +666,8 @@ if __name__ == '__main__':
     print("Running GP...")
     ds = range(NUM_RUNS)
     for d in ds:
-        DNAME = Path(f'./GP_F/GP_F{d}')
+        exceptions_dict[('GP', d)] = []
+        DNAME = Path(f'./GP_{REF}/GP_{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform', seed=d)
@@ -682,29 +690,26 @@ if __name__ == '__main__':
 
             try:
                 stats, predict = train_GP_model(X, y, num_iter=101, DNAME=DNAME, i=i)
-            except RuntimeError as e:
-                msg = str(e)
-                if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
-                    print("RuntimeError during GP training. Treating as underdetermined.")
-                    candidate_triplets = withheld_triplets.index.values
-                    if len(candidate_triplets) == 0:
-                        break
-                    fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
-                    chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
-                    expected_improvements.append(np.nan)
-                    i += 1
-                    continue
-                else:
-                    raise e
+            except Exception as e:
+                print(f"Exception during GP training at run {d}, step {i}: {type(e).__name__}: {str(e)}")
+                exceptions_dict[('GP', d)].append({'step': i, 'exception': type(e).__name__, 'message': str(e)})
+                candidate_triplets = withheld_triplets.index.values
+                if len(candidate_triplets) == 0:
+                    break
+                fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
+                chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
+                expected_improvements.append(np.nan)
+                i += 1
+                continue
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
             # res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']}).groupby('triplet').mean()
             res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']})
             if REF == "max":
-                reference = torch.tensor(res.max()[0])
+                reference = torch.tensor(res["y"].max())
             else:
-                reference = torch.tensor(res.min()[0])
+                reference = torch.tensor(res["y"].min())
             print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
             print('Target Scores:', ei)
@@ -727,7 +732,8 @@ if __name__ == '__main__':
     print("Running GP+Ph...")
     ds = range(NUM_RUNS)
     for d in ds:
-        DNAME = Path(f'./GP_Ph_F/GP_Ph_F{d}')
+        exceptions_dict[('GP_Ph', d)] = []
+        DNAME = Path(f'./GP_Ph_{REF}/GP_Ph_{d}')
         DNAME.mkdir(exist_ok=True, parents=True)
         df.to_csv(DNAME/'df.csv')
         chosen_triplets = choose_base_inds_numpy(df_triplet_means[col_n].values, 3, strategy='uniform', seed=d)
@@ -751,29 +757,26 @@ if __name__ == '__main__':
             model = lambda: PhModel(zlt_mu_stds=(means['Zero_eps_thickness'], stds['Zero_eps_thickness']), current_target=233) 
             try:
                 stats, predict = train_GP_Ph_model(X, y, model, num_iter=101, DNAME=DNAME, i=i, plot=False)
-            except RuntimeError as e:
-                msg = str(e)
-                if "You must train on the training inputs" in msg or "train_inputs cannot be None" in msg:
-                    print("RuntimeError during GP training. Treating as underdetermined.")
-                    candidate_triplets = withheld_triplets.index.values
-                    if len(candidate_triplets) == 0:
-                        break
-                    fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
-                    chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
-                    expected_improvements.append(np.nan)
-                    i += 1
-                    continue
-                else:
-                    raise e
+            except Exception as e:
+                print(f"Exception during GP+Ph training at run {d}, step {i}: {type(e).__name__}: {str(e)}")
+                exceptions_dict[('GP_Ph', d)].append({'step': i, 'exception': type(e).__name__, 'message': str(e)})
+                candidate_triplets = withheld_triplets.index.values
+                if len(candidate_triplets) == 0:
+                    break
+                fallback = torch.randint(max(len(candidate_triplets), 1), (1,), dtype=torch.int64).item()
+                chosen_triplets = np.append(chosen_triplets, candidate_triplets[fallback])
+                expected_improvements.append(np.nan)
+                i += 1
+                continue
 
             X_test, _, _, _, test_df = normalize_df_torch(withheld_triplets, means, stds)
             mu, std = predict(X_test)
             # res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']}).groupby('triplet').mean()
             res = pd.DataFrame({'y': y[:, col_i], 'triplet': chosen_df['triplet']})
             if REF == "max":
-                reference = torch.tensor(res.max()[0])
+                reference = torch.tensor(res["y"].max())
             else:
-                reference = torch.tensor(res.min()[0])
+                reference = torch.tensor(res["y"].min())
             print("Reference FE:", reference.item())
             ei = get_ei(mu[:,col_i], std[:,col_i], reference, minimize=False)
             print('Target Scores:', ei)
@@ -791,9 +794,22 @@ if __name__ == '__main__':
         print(f"Found max after {i} iterations.")
         pd.DataFrame({'chosen_triplets': chosen_triplets, 'expected_improvements':expected_improvements}).to_csv(DNAME/'chosen_triplets.csv')
 
+    # ========== Print exceptions summary ==========
+    print("\n" + "="*80)
+    print("EXCEPTION SUMMARY")
+    print("="*80)
+    for (model_name, run_num), exceptions in exceptions_dict.items():
+        if exceptions:
+            print(f"\n{model_name} - Run {run_num}:")
+            for exc in exceptions:
+                print(f"  Step {exc['step']}: {exc['exception']} - {exc['message']}")
+        else:
+            if run_num == 0:  # Print for first run of each model to show no exceptions
+                print(f"\n{model_name} - Run {run_num}: No exceptions")
+
     # ========== Post-processing ==========
-    print("Post-processing...")
-    for dname in ['MLP_F', 'Ph_F', 'GP_F', 'GP_Ph_F']:
+    print("\nPost-processing...")
+    for dname in [f'MLP_{REF}', f'Ph_{REF}', f'GP_{REF}', f'GP_Ph_{REF}']:
         steps_to_finish = []
         for p in Path(dname).iterdir():
             if not p.is_dir():
@@ -822,7 +838,7 @@ if __name__ == '__main__':
     print("Creating plots...")
     fig, ax = plt.subplots(ncols=2, nrows=2, figsize=(10,8), sharex=True, sharey=True)
     all_df = []
-    for i, dname in enumerate(['MLP_F', 'Ph_F', 'GP_F', 'GP_Ph_F']):
+    for i, dname in enumerate([f'MLP_{REF}', f'Ph_{REF}', f'GP_{REF}', f'GP_Ph_{REF}']):
         _df = process_runs_mean(Path(dname))
         _df = _df[_df['step']>=0]
         sns.lineplot(data=_df, x='step', y='cummax FE', hue='dname', legend=False, ax=ax[i//2, i%2])

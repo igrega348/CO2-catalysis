@@ -468,7 +468,8 @@ class System(torch.nn.Module):
 
         i_target = i_target.reshape(-1,1)
         idx = torch.searchsorted(I, i_target, side='right') - 1 # left values. Now interpolate
-
+        idx = torch.clamp(idx, 0, I.shape[1]-2)
+        
         curr_left = I.gather(dim=1, index=idx)
         curr_right = I.gather(dim=1, index=idx+1)
         p = (i_target - curr_left) / (curr_right - curr_left)
