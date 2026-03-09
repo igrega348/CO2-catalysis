@@ -5,6 +5,7 @@ from .config import default_config
 import pandas as pd
 import torch
 import numpy as np
+from typing import Tuple, Optional
 from botorch.acquisition.analytic import LogExpectedImprovement, ExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.acquisition.objective import ScalarizedPosteriorTransform
@@ -17,7 +18,7 @@ class GDEOptimizer():
     Class to optimize gas diffusion electrodes experimental parameters based with Bayesian optimization using various models.
     """
     
-    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None, input_labels=None, output_labels=None):
+    def __init__(self, model_name="GP+Ph", aquisition="EI", quantity="FE (Eth)", maximize=True, output_dir="./out", config=default_config, bounds=None, input_labels=None, output_labels=None) -> None:
         """
         Initialize the optimizer with the specified model and acquisition function.
 
@@ -28,7 +29,8 @@ class GDEOptimizer():
         :param output_dir: Directory to save output files
         :param config: Configuration dictionary with parameters for training and normalization
         :param bounds: Bounds for the optimization, should be a tensor of shape (2, num_features)
-        
+        :param input_labels: Custom input feature labels (default: GDE electrode parameters)
+        :param output_labels: Custom output labels (default: FE (Eth), FE (CO))
         """
         
         if model_name == 'GP':
@@ -79,10 +81,13 @@ class GDEOptimizer():
         self._means = None  # torch.Tensor of shape (d,)
         self._stds = None   # torch.Tensor of shape (d,)
 
-    def _get_data_tensors(self, data=None, update_stats=False):
+    def _get_data_tensors(self, data: Optional[pd.DataFrame] = None, update_stats: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Convert DataFrame to tensors, applying normalization if configured.
-        Returns: (X, y) tuple of tensors.
+        
+        :param data: DataFrame with input and output columns (default: self.df)
+        :param update_stats: whether to recompute normalization statistics
+        :returns: tuple of (X, y) tensors
         """
 
         if data is None:
@@ -118,9 +123,11 @@ class GDEOptimizer():
         return X, y
 
     @property
-    def bounds(self):
+    def bounds(self) -> torch.Tensor:
         """
         Get the bounds for the optimization based on the data if not specified in the declaration.
+        
+        :returns: tensor of shape (2, d) with min and max bounds for each feature
         """
         if self._bounds is None:
             bds_max = self.df.loc[:, self.input_labels].values.max(axis=0)
@@ -138,7 +145,7 @@ class GDEOptimizer():
         '''
         raise NotImplementedError
     
-    def update_data(self, new_data):
+    def update_data(self, new_data: pd.DataFrame | pd.Series) -> None:
         """
         Add new experimental data to the dataset (and sort by 'triplet' for now).
 
@@ -154,10 +161,11 @@ class GDEOptimizer():
         self.df.sort_values(by="triplet", inplace=True) # TMP
 
  
-    def get_predictor(self):
+    def get_predictor(self) -> Tuple[torch.nn.Module | BoTorchGP, pd.DataFrame]:
         '''
         Train and return the new predictor based on the new data.
-        Returns: (model, stats) tuple where stats is a DataFrame with training metrics.
+        
+        :returns: (model, stats) tuple where model is the trained predictor and stats is a DataFrame with training metrics.
         '''
         X, y = self._get_data_tensors(update_stats=True)
         
@@ -210,10 +218,13 @@ class GDEOptimizer():
 
         return model, stats
 
-    def _get_acquisition_function(self, predictor):
+    def _get_acquisition_function(self, predictor: torch.nn.Module) -> ExpectedImprovement | LogExpectedImprovement:
         """
         Get the acquisition function based on the specified acquisition type.
 
+        :param predictor: trained model for predictions
+        :returns: BoTorch acquisition function (EI or logEI)
+        
         Note: The acquisition function is in normalized space if normalizatipon is enabled, so the expected imporovment is not the actual value for example. Also normalizing here just for consistency because y is not actually normalized.
         """
 
@@ -245,15 +256,14 @@ class GDEOptimizer():
         else:
             raise ValueError("Unsupported acquisition function.")
     
-    def step(self, new_data, bounds=None):
+    def step(self, new_data: pd.DataFrame, bounds: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, pd.Series]:
 
         """
         Perform a step in the optimization process using the new data and bounds.
         
-        :param new_data: New data to be added to the existing data for training the model
-        :param bounds: Optional bounds for the optimization
-
-        :return: The acquisition function value and the next experiment parameters
+        :param new_data: New data to be added to the training set. Do not input data that was alerady given to the object, only new data.
+        :param bounds: Optional bounds for the optimization (default: inferred from data)
+        :returns: tuple of (acquisition_function_value, next_experiment_parameters)
         """
         self.update_data(new_data)
         
@@ -350,7 +360,15 @@ class GDEOptimizer():
 
         return ei_val, pd.Series(x_candidate.detach().cpu().numpy().flatten(), index=self.input_labels)
 
-    def step_within_data(self, new_data, possible_data, return_metrics=False):
+    def step_within_data(self, new_data: pd.DataFrame, possible_data: pd.DataFrame, return_metrics: bool = False) -> Tuple[float, int] | Tuple[float, int, dict]:
+        """
+        Selects the best next point from a set of candidates (possible_dat) consdering the new data (new_data) and the existing data (if any).
+        
+        :param new_data: New data to be added to the training set. Do not input data that was alerady given to the object, only new data.
+        :param possible_data: DataFrame of candidate points to select from
+        :param return_metrics: whether to return training metrics (nll, loss)
+        :returns: (best_ei_value, best_index) or (best_ei_value, best_index, metrics) if return_metrics=True
+        """
         
         self.update_data(new_data)
         

@@ -1,6 +1,6 @@
 from pathlib import Path
 import pickle
-from typing import Optional
+from typing import Optional, Tuple, Callable
 import numpy as np
 import pandas as pd
 import torch
@@ -16,15 +16,33 @@ from rich.progress import track
 from carbondriver.models import EnsPredictor, MultitaskGPhysModel, MultitaskGPModel, BoTorchGP
 
 
-def get_cov(batch):
+def get_cov(batch: torch.Tensor) -> torch.Tensor:
+    """Compute batch covariance with regularization.
+    
+    :param batch: tensor of samples
+    :returns: covariance matrix
+    """
     batch = batch.reshape(*batch.shape[:-2], -1)
     return torch.cov(batch.transpose(-1,-2)) + 1e-6*torch.eye(batch.shape[1])
 
-def get_nll(predictions, targets):
+def get_nll(predictions: gpytorch.distributions.MultitaskMultivariateNormal, targets: torch.Tensor) -> torch.Tensor:
+    """Compute negative log likelihood from GP predictions by sampling.
+    
+    :param predictions: GP predictive distribution
+    :param targets: target values
+    :returns: NLL scalar
+    """
     samples = predictions.sample(sample_shape=torch.Size([1000]))
     return get_nll_samples(samples, targets)
 
-def get_nll_samples(samples, targets, covariance_scaler: Optional[torch.Tensor] = None):
+def get_nll_samples(samples: torch.Tensor, targets: torch.Tensor, covariance_scaler: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Compute NLL from samples, optionally scaling diagonal covariance.
+    
+    :param samples: samples from predictive distribution
+    :param targets: target values
+    :param covariance_scaler: optional scalar to scale variance
+    :returns: NLL scalar
+    """
     mean = samples.mean(dim=0)
     covariance = get_cov(samples)
     if covariance_scaler is not None:
@@ -33,7 +51,19 @@ def get_nll_samples(samples, targets, covariance_scaler: Optional[torch.Tensor] 
     gmodel = gpytorch.distributions.MultitaskMultivariateNormal(mean=mean, covariance_matrix=covariance)
     return -(gmodel.log_prob(targets) / gmodel.event_shape.numel())
 
-def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i, progress=False, plot=False):
+def train_model_ens(X_train: torch.Tensor, y_train: torch.Tensor, model_constructor: Callable, num_iter: int, DNAME: str, i: int, progress: bool = False, plot: bool = False) -> Tuple[pd.DataFrame, EnsPredictor]:
+    """Train 50-model ensemble with per-model bagging and variance scaling.
+    
+    :param X_train: training features of shape (n, d)
+    :param y_train: training targets of shape (n, m)
+    :param model_constructor: callable that creates model instances
+    :param num_iter: number of training iterations
+    :param DNAME: directory name for saving stats
+    :param i: iteration index for file naming
+    :param progress: whether to show progress bar
+    :param plot: whether to plot diagnostics
+    :returns: tuple of (stats_df, ensemble_predictor)
+    """
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True)
     if plot:
@@ -141,7 +171,18 @@ def train_model_ens(X_train, y_train, model_constructor, num_iter: int, DNAME, i
 
     return stats, EnsPredictor(scaled_model)
 
-def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, plot=False):
+def train_GP_model(X_train: torch.Tensor, y_train: torch.Tensor, num_iter: int, DNAME: str, i: int, progress: bool = False, plot: bool = False) -> Tuple[pd.DataFrame, Callable, BoTorchGP, gpytorch.likelihoods.Likelihood]:
+    """Train multitask GP on full dataset.
+    
+    :param X_train: training features of shape (n, d)
+    :param y_train: training targets of shape (n, 2)
+    :param num_iter: number of training iterations
+    :param DNAME: directory name for saving stats
+    :param i: iteration index for file naming
+    :param progress: whether to show progress bar
+    :param plot: whether to plot diagnostics
+    :returns: tuple of (stats_df, predict_fn, botorch_wrapper, likelihood)
+    """
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True, parents=True)
     if plot:
@@ -230,7 +271,15 @@ def train_GP_model(X_train, y_train, num_iter: int, DNAME, i, progress=False, pl
 
     return stats, predict, BoTorchGP(model), likelihood
 
-def train_Ph_model(X_train, y_train, model_constructor, num_iter):
+def train_Ph_model(X_train: torch.Tensor, y_train: torch.Tensor, model_constructor: Callable, num_iter: int) -> Tuple[pd.DataFrame, torch.nn.Module]:
+    """Train physics-informed model with MSE loss.
+    
+    :param X_train: training features of shape (n, d)
+    :param y_train: training targets of shape (n, 2)
+    :param model_constructor: callable that creates model instances
+    :param num_iter: number of training iterations
+    :returns: tuple of (stats_df, trained_model)
+    """
     model = model_constructor()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -249,7 +298,15 @@ def train_Ph_model(X_train, y_train, model_constructor, num_iter):
     return stats, model
 
 ## For GP+Ph model training, not to be confused with train_GP_model above
-def train_GP(X_train, y_train, mean_model, num_iter):
+def train_GP(X_train: torch.Tensor, y_train: torch.Tensor, mean_model: torch.nn.Module, num_iter: int) -> Tuple[pd.DataFrame, MultitaskGPhysModel]:
+    """Train GP+Physics model with frozen mean model.
+    
+    :param X_train: training features of shape (n, d)
+    :param y_train: training targets of shape (n, 2)
+    :param mean_model: physics-informed model for mean function (will be frozen)
+    :param num_iter: number of training iterations
+    :returns: tuple of (stats_df, gp_physics_model)
+    """
     # set up model and optimizer
     likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=2)
 
@@ -290,7 +347,20 @@ def train_GP(X_train, y_train, mean_model, num_iter):
 
     return stats, model
     
-def train_GP_Ph_model(X_train, y_train, model_constructor, num_iter: int, DNAME, i, progress=False, plot=False, ph_frac: float = 0.5):
+def train_GP_Ph_model(X_train: torch.Tensor, y_train: torch.Tensor, model_constructor: Callable, num_iter: int, DNAME: str, i: int, progress: bool = False, plot: bool = False, ph_frac: float = 0.5) -> Tuple[pd.DataFrame, Callable, BoTorchGP, gpytorch.likelihoods.Likelihood]:
+    """Train physics model on subset, then GP+Physics on remainder.
+    
+    :param X_train: training features of shape (n, d)
+    :param y_train: training targets of shape (n, 2)
+    :param model_constructor: callable that creates physics model instances
+    :param num_iter: number of training iterations per phase
+    :param DNAME: directory name for saving stats
+    :param i: iteration index for file naming
+    :param progress: whether to show progress bar
+    :param plot: whether to plot diagnostics
+    :param ph_frac: fraction of data for physics model training
+    :returns: tuple of (stats_df, predict_fn, botorch_wrapper, likelihood)
+    """
     DNAME = Path(DNAME)
     DNAME.mkdir(exist_ok=True, parents=True)
     

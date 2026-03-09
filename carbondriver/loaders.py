@@ -8,7 +8,13 @@ import json
 
 
 # Load results from folder
-def load_results_from_folder(folder: Path, plot: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def load_results_from_folder(folder: Path, plot: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Load training losses from JSON files in folder.
+    
+    :param folder: path to folder containing losses*.json files
+    :param plot: whether to plot training curves
+    :returns: tuple of (train_df, val_df) DataFrames
+    """
     df_res = pd.DataFrame()
     for f in Path(folder).glob('losses*.json'):
         d = json.loads(f.read_text())
@@ -28,7 +34,12 @@ def load_results_from_folder(folder: Path, plot: bool=False) -> Tuple[pd.DataFra
     df_res_val = df_res[val_cols]
     return df_res_train, df_res_val
 
-def load_gas_data(file: Optional[Path] = None):
+def load_gas_data(file: Optional[Path] = None) -> pd.DataFrame:
+    """Load experimental data from Excel and compute electrode thickness.
+    
+    :param file: path to Excel file (default: ./Characterization_data.xlsx)
+    :returns: DataFrame with features and experimental Faradaic efficiencies
+    """
     if file is None:
         file = Path('./Characterization_data.xlsx')
     df = pd.read_excel(file, skiprows=[1], index_col=0)
@@ -65,15 +76,16 @@ def feature_stats(
     all_means: Optional[pd.Series] = None,
     all_stds: Optional[pd.Series] = None,
     as_torch: bool = True,
-):
+) -> Tuple[torch.Tensor, torch.Tensor] | Tuple[pd.Series, pd.Series]:
     """
     Return per-feature means/stds (excluding the last two target columns).
 
-    Parameters
-    - df: full dataframe with features first and last two columns as targets.
-    - all_means, all_stds: optional precomputed stats across all columns (as returned by normalize_df_torch or load_data).
-    - as_torch: return tensors if True, else pandas Series.
-
+    :param df: full dataframe with features first and last two columns as targets
+    :param all_means: optional precomputed means across all columns
+    :param all_stds: optional precomputed stds across all columns
+    :param as_torch: return tensors if True, else pandas Series
+    :returns: tuple of (means, stds) as torch.Tensor or pd.Series
+    
     Notes
     - If all_means/all_stds are provided, we subset them to feature columns.
     - Otherwise, we compute stats over feature columns only.

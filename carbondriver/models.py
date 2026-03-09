@@ -31,7 +31,15 @@ class PhModel(torch.nn.Module):
         dropout: float = 0.1,
         ldim: int = 64,
         config: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
+        """
+        :param zlt_mu: mean of Zero_eps_thickness for normalization
+        :param zlt_sigma: std of Zero_eps_thickness for normalization
+        :param current_target: target current density for electrode simulation
+        :param dropout: dropout probability
+        :param ldim: hidden layer dimension
+        :param config: configuration dict with 'normalize_inputs' flag
+        """
         super().__init__()
         self.net = torch.nn.Sequential(
             torch.nn.Linear(5, ldim),
@@ -70,7 +78,13 @@ class PhModel(torch.nn.Module):
         # persistent forward counter to track how many times forward() was called
         self._forward_counter = 0
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Predict Faradaic efficiency for given experimental parameters.
+        
+        :param x: input features of shape (batch, 5) [AgCu Ratio, Naf vol, Sust vol, Zero_eps_thickness, Catalyst mass loading]
+        :returns: predicted FE values of shape (batch, 2) [FE(C2H4), FE(CO)]
+        """
         # increment and print persistent forward counter
         self._forward_counter += 1
         # columns of x: AgCu Ratio, Naf vol (ul), Sust vol (ul), Zero_eps_thickness, Catalyst mass loading
@@ -113,9 +127,13 @@ class PhModel(torch.nn.Module):
 
 
 class MLPModel(torch.nn.Module):
-    def __init__(self, n_inputs: int, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64):
+    """Multi-layer perceptron for regression or multitask prediction."""
+    def __init__(self, n_inputs: int, n_outputs: int = 2, dropout: float = 0.1, ldim: int = 64) -> None:
         """
-        n_outputs: number of output targets (e.g. 1 for single objective, 2 for FE(Eth)/FE(CO), etc.)
+        :param n_inputs: number of input features
+        :param n_outputs: number of output targets (e.g. 1 for single objective, 2 for FE(Eth)/FE(CO), etc.)
+        :param dropout: dropout probability
+        :param ldim: hidden layer dimension
         """
         super().__init__()
         self.mlp = torch.nn.Sequential(
@@ -133,16 +151,20 @@ class MLPModel(torch.nn.Module):
             torch.nn.Sigmoid(),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(x)
 
 class EnsPredictor(EnsembleModel):
-    def __init__(self,model_input):
+    """Wraps ensemble models for BoTorch-compatible shape handling."""
+    def __init__(self, model_input: torch.nn.Module) -> None:
+        """
+        :param model_input: ensemble model to wrap
+        """
         super().__init__()
         self._num_outputs = 1
         self.model_input = model_input
 
-    def forward(self, X: torch.Tensor):
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
         # Expect X of shape (batch, q, d). We handle q=1 by squeezing.
         if X.dim() == 3 and X.shape[1] == 1:
             X_in = X.squeeze(1)  # (batch, d)
@@ -167,13 +189,17 @@ class EnsPredictor(EnsembleModel):
         return result
 
 
-class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
-    def __init__(self, model):
+class BoTorchGP(GPyTorchModel):
+    """Wrapper for GPyTorch models to work with BoTorch acquisition functions."""
+    def __init__(self, model: gpytorch.models.ExactGP) -> None:
+        """
+        :param model: GPyTorch ExactGP model
+        """
         super().__init__()
         self.model = model
         self._num_outputs = 1
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 3 and x.shape[1] == 1:
             X_in = x.squeeze(1)  # (batch, d)
         elif x.dim() == 2:
@@ -181,7 +207,13 @@ class BoTorchGP(GPyTorchModel): #Wrapper for EI acquisition function
         return self.model(X_in)
 
 class MultitaskGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
+    """Multitask Gaussian Process for joint prediction of two outputs."""
+    def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor, likelihood: gpytorch.likelihoods.Likelihood) -> None:
+        """
+        :param train_x: training inputs of shape (n, d)
+        :param train_y: training targets of shape (n, 2)
+        :param likelihood: GPyTorch likelihood
+        """
         super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.MultitaskMean(
             gpytorch.means.ConstantMean(), num_tasks=2
@@ -190,16 +222,20 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
         self.num_outputs = 2
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultitaskMultivariateNormal:
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
 
 class MyMean(gpytorch.means.Mean):
     """
-    Mean function.
+    Mean function for physics-informed GP using a neural network model.
     """
-    def __init__(self, model: Optional[torch.nn.Module] = None, freeze_model: bool = False):
+    def __init__(self, model: Optional[torch.nn.Module] = None, freeze_model: bool = False) -> None:
+        """
+        :param model: optional model to use as mean function (default: PhModel)
+        :param freeze_model: whether to freeze model parameters and remove dropout
+        """
         super().__init__()
         if model is not None:
             self.model = model
@@ -219,18 +255,32 @@ class MyMean(gpytorch.means.Mean):
                 param.requires_grad = False
             remove_dropout(self.model)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Evaluate mean function.
+        
+        :param x: input tensor
+        :returns: mean function output squeezed to 1D
+        """
         return self.model(x).squeeze()
     
 class MultitaskGPhysModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, model: Optional[torch.nn.Module] = None, freeze_model: bool = False):
+    """Combines physics-informed mean (PhModel) with GP covariance."""
+    def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor, likelihood: gpytorch.likelihoods.Likelihood, model: Optional[torch.nn.Module] = None, freeze_model: bool = False) -> None:
+        """
+        :param train_x: training inputs of shape (n, d)
+        :param train_y: training targets of shape (n, 2)
+        :param likelihood: GPyTorch likelihood
+        :param model: optional physics-informed model for mean function
+        :param freeze_model: whether to freeze model parameters
+        """
         super(MultitaskGPhysModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = MyMean(model=model, freeze_model=freeze_model)
         self.covar_module = gpytorch.kernels.MultitaskKernel(
             gpytorch.kernels.RBFKernel(), num_tasks=2, rank=1
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultitaskMultivariateNormal:
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
