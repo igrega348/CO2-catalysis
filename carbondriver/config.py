@@ -1,8 +1,8 @@
 default_config = {
     "run_name": "out",
-    "num_iter": 400,
+    "num_iter": 101,
     "make_plots": False,
     "normalize_inputs": True,
-    "normalize_outputs": True,
+    "normalize_outputs": False,
     "EI_reference": "max",
 }

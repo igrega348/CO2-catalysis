@@ -462,7 +462,7 @@ class GDEOptimizer:
         return_metrics: bool = False,
     ) -> Tuple[float, int] | Tuple[float, int, dict]:
         """
-        Selects the best next point from a set of candidates (possible_dat) consdering the new data (new_data) and the existing data (if any).
+        Selects the best next point from a set of candidates (possible_dat) considering the new data (new_data) and the existing data (if any).
 
         :param new_data: New data to be added to the training set. Do not input data that was alerady given to the object, only new data.
         :param possible_data: DataFrame of candidate points to select from
@@ -487,11 +487,17 @@ class GDEOptimizer:
                 or "cholesky_cpu" in msg
             ):
                 print("RuntimeError during GP training. Treating as underdetermined.")
-                return (
-                    torch.nan,
-                    torch.randint(len(possible_data) - 1, (1,)).squeeze(),
-                    {},
-                )
+                if return_metrics:
+                    return (
+                        torch.nan,
+                        torch.randint(len(possible_data) - 1, (1,)).squeeze(),
+                        {},
+                    )
+                else:
+                    return (
+                        torch.nan,
+                        torch.randint(len(possible_data) - 1, (1,)).squeeze()
+                    )
             else:
                 raise
 

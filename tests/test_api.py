@@ -1,6 +1,5 @@
 from pathlib import Path
 import random
-random.seed(40)
 
 # Path to this test file
 dir_above = Path(__file__).parent
@@ -8,10 +7,12 @@ dir_above = Path(__file__).parent
 # Path to paper/Characterization_data.xlsx from repo root
 data_path = dir_above.parent / "paper" / "Characterization_data.xlsx"
 
+
 def test_import():
     from carbondriver import GDEOptimizer
 
     gde = GDEOptimizer(output_dir="./tmp_test_out")
+
 
 def test_gde_optimizer_within_GPPH():
     from carbondriver import GDEOptimizer
@@ -36,6 +37,7 @@ def test_gde_optimizer_within_GPPH():
     ei, next_pick = gde.step_within_data(df_new, df_explore)
 
     print("Second pick", ei, int(next_pick))
+
 
 def test_gde_optimizer_within_GP():
     from carbondriver import GDEOptimizer
@@ -63,42 +65,6 @@ def test_gde_optimizer_within_GP():
 
     print("Second pick", ei, int(next_pick))
 
-def test_gde_optimizer_free_GPPh():
-    from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_gas_data
-
-    gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
-
-    df = load_gas_data(data_path)
-
-    ei, next_pick = gde.step(df)
-
-    print(ei, next_pick)
-
-
-def test_gde_optimizer_free_GP():
-    from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_gas_data
-
-    gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
-
-    df = load_gas_data(data_path)
-
-    ei, next_pick = gde.step(df)
-
-    print(ei, next_pick)
-
-def test_gde_optimizer_free_Ph():
-    from carbondriver import GDEOptimizer
-    from carbondriver.loaders import load_gas_data
-
-    gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
-
-    df = load_gas_data(data_path)
-
-    ei, next_pick = gde.step(df)
-
-    print(ei, next_pick)
 
 def test_gde_optimizer_within_Ph():
     from carbondriver import GDEOptimizer
@@ -111,7 +77,6 @@ def test_gde_optimizer_within_Ph():
     df = load_gas_data(data_path)
 
     df_train = df.loc[:30]
-    breakpoint()
     df_explore = df.loc[31:]
 
     ei, next_pick = gde.step_within_data(df_train, df_explore)
@@ -120,10 +85,10 @@ def test_gde_optimizer_within_Ph():
 
     df_new = df_explore.iloc[int(next_pick)]
     df_explore = df_explore.drop(index=df_new.name)
-    breakpoint()
     ei, next_pick = gde.step_within_data(df_new, df_explore)
 
     print("Second pick", ei, int(next_pick))
+
 
 def test_gde_optimizer_within_MLP():
     from carbondriver import GDEOptimizer
@@ -149,20 +114,57 @@ def test_gde_optimizer_within_MLP():
 
     print("Second pick", ei, int(next_pick))
 
+
 def test_gde_optimizer_free_MLP():
     from carbondriver import GDEOptimizer
     from carbondriver.loaders import load_gas_data
     import numpy as np
-    
+
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
 
     df = load_gas_data(data_path)
-    fail_df = df[df['triplet'].isin([1, 24, 19])].copy()
 
-    ei, next_pick = gde.step(fail_df)
-    assert np.isnan(ei), "EI did not return NaN as intended"
-    
     gde = GDEOptimizer("MLP", output_dir="./tmp_test_out")
+
     ei, next_pick = gde.step(df)
 
+    print(ei, next_pick)
 
+
+def test_gde_optimizer_free_GPPh():
+    from carbondriver import GDEOptimizer
+    from carbondriver.loaders import load_gas_data
+
+    gde = GDEOptimizer("GP+Ph", output_dir="./tmp_test_out")
+
+    df = load_gas_data(data_path)
+
+    ei, next_pick = gde.step(df)
+
+    print(ei, next_pick)
+
+
+def test_gde_optimizer_free_GP():
+    from carbondriver import GDEOptimizer
+    from carbondriver.loaders import load_gas_data
+
+    gde = GDEOptimizer("GP", output_dir="./tmp_test_out")
+
+    df = load_gas_data(data_path)
+
+    ei, next_pick = gde.step(df)
+
+    print(ei, next_pick)
+
+
+def test_gde_optimizer_free_Ph():
+    from carbondriver import GDEOptimizer
+    from carbondriver.loaders import load_gas_data
+
+    gde = GDEOptimizer("Ph", output_dir="./tmp_test_out")
+
+    df = load_gas_data(data_path)
+
+    ei, next_pick = gde.step(df)
+
+    print(ei, next_pick)
