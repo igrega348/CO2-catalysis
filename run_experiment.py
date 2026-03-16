@@ -131,13 +131,20 @@ def process_runs_mean(model_name: str):
             continue
         
         # Read the results
-        chosen_df = pd.read_csv(results_file, index_col=0)
+
         df_triplet_means = df.groupby('triplet').mean()
+        chosen_df = pd.read_csv(results_file, index_col=0)
+
+        empty_df = pd.DataFrame(index=np.arange(2,len(df_triplet_means)), columns=chosen_df.columns)
+
+        empty_df['cummax FE'] = df_triplet_means.loc[:,config["property_name"]].max()
         
         # Calculate cummax FE for this run
         chosen_df['cummax FE'] = df_triplet_means.loc[
             chosen_df['chosen_triplets'], config["property_name"]
         ].cummax().values
+
+        chosen_df = chosen_df.combine_first(empty_df)
         
         # Add step column (offset by 2 to match old convention)
         i0 = 2
@@ -150,6 +157,38 @@ def process_runs_mean(model_name: str):
     
     print(f"    ✓ Loaded {run_count} runs for {model_name}")
     return pd.concat(all_df, axis=0) if all_df else pd.DataFrame()
+
+def create_random_baseline(n_runs):
+    """Create baseline runs"""
+    
+    all_df = []
+    run_count = 0
+
+    df_triplet_means = df.groupby('triplet').mean()
+    
+    for run in range(n_runs):
+
+        current_run = pd.DataFrame(index=np.arange(len(df_triplet_means)))
+
+        current_run["chosen_triplets"] = np.random.permutation(np.arange(len(df_triplet_means)))
+        
+        # Calculate cummax FE for this run
+        current_run['cummax FE'] = df_triplet_means.loc[
+            current_run['chosen_triplets'], config["property_name"]
+        ].cummax().values
+        
+        # Add step column (offset by 2 to match old convention)
+        i0 = 2
+        current_run['step'] = current_run.index - i0
+        current_run['dname'] = run
+        current_run['model'] = "baseline"
+
+        current_run = current_run[current_run['step'] >= 0]
+        
+        all_df.append(current_run)
+    
+    print(f"    ✓ Created {n_runs} baseline runs")
+    return pd.concat(all_df, axis=0)
 
 # ============================================================================
 # Main execution
@@ -206,13 +245,36 @@ if __name__ == '__main__':
     # Plot 1: 2x2 grid - one subplot per model
     # ========================================================================
     print("\n[4/6] Generating 2x2 grid plot...")
-    fig, ax = plt.subplots(ncols=2, nrows=2, figsize=(10, 8), sharex=True, sharey=True)
+    fig, ax = plt.subplots(ncols=3, nrows=2, figsize=(15, 8), sharex=True, sharey=True)
     all_data = []
+
+    combined_csv = OUTPUT_BASE / 'all_runs_combined.csv'
+
+    if not combined_csv.exists():
     
-    for i, model_name in enumerate(config["models"]):
-        print(f"  Processing subplot for {model_name}...")
-        _df = process_runs_mean(model_name)
-        _df = _df[_df['step'] >= 0]
+        for i, model_name in enumerate(config["models"]):
+            print(f"  Processing subplot for {model_name}...")
+            _df = process_runs_mean(model_name)
+            _df = _df[_df['step'] >= 0]
+        
+            all_data.append(_df)
+        
+        all_df = pd.concat(all_data, axis=0)
+        
+        all_df.to_csv(OUTPUT_BASE / 'all_runs_combined.csv', index=False)
+
+    else:
+
+        print(f"  Loading combined data from {combined_csv}...")
+        all_df = pd.read_csv(combined_csv)
+
+    baseline_df = create_random_baseline(n_runs=config["num_runs"])
+
+    all_df_baseline = pd.concat([all_df, baseline_df], axis=0)
+        
+    for i, model_name in enumerate(config["models"]+["baseline"]):    
+
+        _df = all_df_baseline[all_df_baseline['model'] == model_name]
         
         sns.lineplot(
             data=_df, 
@@ -220,13 +282,12 @@ if __name__ == '__main__':
             y='cummax FE', 
             hue='dname', 
             legend=False, 
-            ax=ax[i // 2, i % 2]
+            ax=ax[i // 3, i % 3]
         )
-        ax[i // 2, i % 2].set_title(model_name, fontsize=12, fontweight='bold')
-        ax[i // 2, i % 2].set_ylabel('Cumulative max FE (Eth)')
-        ax[i // 2, i % 2].set_xlabel('Step')
+        ax[i // 3, i % 3].set_title(model_name, fontsize=12, fontweight='bold')
+        ax[i // 3, i % 3].set_ylabel('Cumulative max FE (Eth)')
+        ax[i // 3, i % 3].set_xlabel('Step')
         
-        all_data.append(_df)
     
     fig.tight_layout()
     fig.savefig(OUTPUT_BASE / 'cummax_FE_grid.png', dpi=300, bbox_inches='tight')
@@ -237,11 +298,10 @@ if __name__ == '__main__':
     # Plot 2: Combined - all models on one plot
     # ========================================================================
     print("\n[5/6] Generating combined model comparison plot...")
-    all_df = pd.concat(all_data, axis=0)
     
-    plt.figure(figsize=(3.75, 3))
+    plt.figure(figsize=(8, 8))
     sns.lineplot(
-        data=all_df, 
+        data=all_df_baseline, 
         x='step', 
         y='cummax FE', 
         hue='model', 
@@ -250,7 +310,7 @@ if __name__ == '__main__':
     )
     plt.ylabel('Cumulative max FE (Eth)')
     plt.xlabel('Step')
-    plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.legend(title='Model', loc='lower right')
     plt.tight_layout()
     plt.savefig(OUTPUT_BASE / 'active_learning_combined.png', dpi=300, bbox_inches='tight')
     print(f"  ✓ Saved: {OUTPUT_BASE / 'active_learning_combined.png'}")
@@ -310,6 +370,8 @@ if __name__ == '__main__':
     print("\n" + "="*70)
     print("SUMMARY STATISTICS")
     print("="*70)
+
+    stats = dict()
     
     for model_name in config["models"]:
         print(f"\n{model_name.upper()}:")
@@ -317,25 +379,11 @@ if __name__ == '__main__':
         final_nlls = []
         final_losses = []
         run_count = 0
+
+        df_model = all_df.loc[all_df["model"]==model_name]
         
-        for run_dir in OUTPUT_BASE.glob(model_name + '_run_*/'):
-            if not run_dir.is_dir() or not run_dir.name.startswith(model_name):
-                continue
-            
-            results_file = run_dir / 'chosen_triplets.csv'
-            if not results_file.exists():
-                continue
-            
-            run_count += 1
-            chosen_df = pd.read_csv(results_file, index_col=0)
-            df_triplet_means = df.groupby('triplet').mean()
-            chosen_df['cummax FE'] = df_triplet_means.loc[
-                chosen_df['chosen_triplets'], config["property_name"]
-            ].cummax().values
-            
-            # Add step column (offset by 2 due to triplet indexing)
-            i0 = 2
-            chosen_df['step'] = chosen_df.index - i0
+        for run in df_model['dname'].unique():
+            chosen_df = df_model[df_model['dname'] == run]
             
             # Collect final NLL and loss values (last non-null).
             # Simplified: try to append the last non-NaN value for each column,
@@ -364,14 +412,23 @@ if __name__ == '__main__':
             
             print(f"  Runs analyzed: {run_count}")
             print(f"  Mean steps to FE=0.245: {mean_steps:.2f} ± {std_steps:.2f}")
+            stats[model_name] = {"Mean Steps": mean_steps, "Std Steps": std_steps, "Acceleration Factor": accel_factor} 
             if final_losses:
                 print(f"  Final MSE (loss): {np.mean(final_losses):.4f} ± {np.std(final_losses):.4f}")
+                stats[model_name]["Final MSE mean"] = np.mean(final_losses)
+                stats[model_name]["Final MSE std"] = np.std(final_losses)
             if final_nlls:
                 print(f"  Final NLL: {np.mean(final_nlls):.4f} ± {np.std(final_nlls):.4f}")
+                stats[model_name]["Final NLL mean"] = np.mean(final_nlls)
+                stats[model_name]["Final NLL std"] = np.std(final_nlls)
             print(f"  Acceleration factor: {accel_factor:.2f}x")
+            
         else:
-            print(f"  No data available for {model_name}")
-    
+            print(f"  No data available for {model_name}") 
+
+    stats_df = pd.DataFrame(stats).T
+    stats_df.to_csv(OUTPUT_BASE / 'summary_statistics.csv')
+            
     print("\n" + "="*70)
     print("✓ Analysis complete!")
     print("="*70 + "\n")
