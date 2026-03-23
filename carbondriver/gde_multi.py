@@ -117,6 +117,7 @@ class System(torch.nn.Module):
         chemical_reaction_rates: Optional[Dict[str, float]]=None,
         co2_equilibrium: Optional[Dict[str, float]]=None,
         method: Literal['DIC', 'CO2 eql'] = 'CO2 eql',
+        system_phase: Literal['solid', 'liquid'] = 'solid',
     ):
         super().__init__()
         self.T = T
@@ -128,7 +129,11 @@ class System(torch.nn.Module):
         self.c_khco3 = c_khco3
         self.c_k = c_k
         self.dic = dic
-        self.method = method
+        self.system_phase = system_phase
+        if self.system_phase == 'liquid':
+            self.method = 'DIC'
+        else:
+            self.method = method
 
         if diffusion_coefficients is not None:
             self.diffusion_coefficients = PositiveModelData(**diffusion_coefficients)
@@ -146,7 +151,10 @@ class System(torch.nn.Module):
         if co2_equilibrium is not None:
             self.co2_equilibrium = co2_equilibrium
         else:
-            self.co2_equilibrium = self._co2_equilibrium()
+            if self.method == 'DIC':
+                self.co2_equilibrium = self.calculate_dic_solution
+            else:
+                self.co2_equilibrium = self._co2_equilibrium()
 
 
     @property
@@ -292,6 +300,11 @@ class System(torch.nn.Module):
         DCO2 = self.bruggeman(self.diffusion_coefficients['CO2'], eps)
         E_CO = self.electrode_reaction_potentials['E_0_CO']
         co2_equilibrium = self.co2_equilibrium
+        c_CO2_bulk = co2_equilibrium['CO2']
+        if self.system_phase == 'liquid':
+            co2_transfer_coeff = self.flow_channel_characteristics['K_L_CO2']
+        else:
+            co2_transfer_coeff = gdl_mass_transfer_coeff
             
         OH_neg = co2_equilibrium['OH']
         HCO3_neg = co2_equilibrium['HCO3']
@@ -307,8 +320,11 @@ class System(torch.nn.Module):
         k0_C2H4 = A/(6*F) * self.electrode_reaction_kinetics['i_0_C2H4'] * thetas['C2H4']/self.chemical_reaction_rates['c_ref'] * torch.exp(
             -overpotential_C2H4 * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_C2H4'])
         k0 = k0_CO + k0_C2H4
-        eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
-        c00 = Hnr*self.p0*eff_0
+        eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/co2_transfer_coeff)
+        if self.system_phase == 'liquid':
+            c00 = c_CO2_bulk*eff_0
+        else:
+            c00 = Hnr*self.p0*eff_0
 
         # estimating OH- concentration
         r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b']) # phi_ext is with respect to SHE
@@ -326,8 +342,11 @@ class System(torch.nn.Module):
 
         # update CO2 concentration 
         k1 = k0 + eps*self.chemical_reaction_rates['k1f']*c10
-        eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
-        c01 = eff_1*self.p0*Hnr
+        eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/co2_transfer_coeff)
+        if self.system_phase == 'liquid':
+            c01 = eff_1*c_CO2_bulk
+        else:
+            c01 = eff_1*self.p0*Hnr
         # update OH- concentration
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c01
         c11 = OH_neg + (
@@ -347,7 +366,10 @@ class System(torch.nn.Module):
             1+(B_2*C * torch.exp(-A_1*C)) / (1+torch.log(torch.sqrt(1+B_2*C*torch.exp(-A_1*C))))
             ) / C
         # salting out corrected CO2 concentration
-        c02 = eff_1*self.p0*Hnr_c(c11,c20)
+        if self.system_phase == 'liquid':
+            c02 = eff_1*c_CO2_bulk
+        else:
+            c02 = eff_1*self.p0*Hnr_c(c11,c20)
         r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c02
         # corrected OH- concentration
         c12 = OH_neg + (
@@ -364,13 +386,16 @@ class System(torch.nn.Module):
                 k2*L**2/DCO2
             ) / torch.tanh(torch.sqrt(
                 k2*L**2/DCO2
-            )) + k2*L/gdl_mass_transfer_coeff
+            )) + k2*L/co2_transfer_coeff
         )
         A_1_1 = (
             2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
         ) / (2*self.flow_channel_characteristics['K_L_CO3'])
         # formula for this B2 is different than for the previous B2
-        B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
+        if self.system_phase == 'liquid':
+            B_2_1 = L*2*k0*eff_2*c_CO2_bulk / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
+        else:
+            B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
         c21 = A_1_1+torch.log(
             1+(
                 B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']) * torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))
@@ -381,7 +406,10 @@ class System(torch.nn.Module):
             self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
         )
         c21 = torch.maximum(c21, torch.zeros_like(c21))
-        c03 = self.p0*Hnr_c(c12, c21)*eff_2
+        if self.system_phase == 'liquid':
+            c03 = c_CO2_bulk*eff_2
+        else:
+            c03 = self.p0*Hnr_c(c12, c21)*eff_2
         potential_vs_rhe = phi_ext - R*T/F*torch.log(c12/OH_neg)
         co_current_density = L*c03*k0_CO*2*F/10 # mA/cm^2
         c2h4_current_density = L*c03*k0_C2H4*6*F/10 # mA/cm^2
@@ -393,19 +421,27 @@ class System(torch.nn.Module):
         fe_c2h4 = c2h4_current_density / current_density
         parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
         electrode = L*k0*c03
-        gdl_flux = gdl_mass_transfer_coeff*(
-            Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(
-                k2*L**2/DCO2
-            ) / torch.tanh(
-                torch.sqrt(k2*L**2/DCO2)
+        if self.system_phase == 'liquid':
+            gdl_flux = torch.zeros_like(c03)
+            hco3 = torch.minimum(
+                HCO3_neg+c_CO2_bulk,
+                co3*10**(3-pH)/self.initial_carbonate_equilibria['K1']
             )
-        )
-        hco3 = torch.minimum(
-            HCO3_neg+Hnr_c(c12,c21)*self.p0,
-            co3*10**(3-pH)/self.initial_carbonate_equilibria['K1']
-        )
+            solubility = torch.ones_like(c03)
+        else:
+            gdl_flux = gdl_mass_transfer_coeff*(
+                Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(
+                    k2*L**2/DCO2
+                ) / torch.tanh(
+                    torch.sqrt(k2*L**2/DCO2)
+                )
+            )
+            hco3 = torch.minimum(
+                HCO3_neg+Hnr_c(c12,c21)*self.p0,
+                co3*10**(3-pH)/self.initial_carbonate_equilibria['K1']
+            )
+            solubility = Hnr_c(c12,c21)/Hnr
         # deleted voltage and energy efficiencies for now, just to avoid possible bugs
-        solubility = Hnr_c(c12,c21)/Hnr
         return {
             'phi_ext': phi_ext,
             'k0': k0,
