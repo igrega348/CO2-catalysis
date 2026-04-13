@@ -1,8 +1,9 @@
 from carbondriver import gde_multi
+import pytest
 import torch
 
 
-def _make_system(system_phase='solid'):
+def _make_system(system_phase='solid', method='CO2 eql'):
     erc = gde_multi.electrode_reaction_kinetics | {}
     erc['i_0_CO'] = torch.nn.parameter.Parameter(torch.tensor(erc['i_0_CO']))
     erc['i_0_C2H4'] = torch.nn.parameter.Parameter(torch.tensor(erc['i_0_C2H4']))
@@ -16,6 +17,7 @@ def _make_system(system_phase='solid'):
         electrode_reaction_kinetics=erc,
         electrode_reaction_potentials=gde_multi.electrode_reaction_potentials,
         chemical_reaction_rates=gde_multi.chemical_reaction_rates,
+        method=method,
         system_phase=system_phase,
     )
 
@@ -33,18 +35,23 @@ def _base_inputs():
     return eps, r, L, thetas, gdl_mass_transfer_coefficient
 
 
-def test_solid_mode_defaults_to_co2_equilibrium_method():
-    ph_model = _make_system(system_phase='solid')
-    assert ph_model.method == 'CO2 eql'
+@pytest.mark.parametrize(
+    'method',
+    ['CO2 eql', 'DIC'],
+)
+def test_solid_mode_keeps_requested_method(method):
+    ph_model = _make_system(system_phase='solid', method=method)
+    assert ph_model.method == method
 
 
-def test_liquid_mode_forces_dic_method():
-    ph_model = _make_system(system_phase='liquid')
+def test_liquid_mode_forces_dic_method_even_when_co2_equilibrium_requested():
+    ph_model = _make_system(system_phase='liquid', method='CO2 eql')
     assert ph_model.method == 'DIC'
 
 
-def test_solve_current_runs_in_solid_mode_with_gdl_flux_key():
-    ph_model = _make_system(system_phase='solid')
+@pytest.mark.parametrize('system_phase', ['solid', 'liquid'])
+def test_solve_current_runs_for_each_physics_mode(system_phase):
+    ph_model = _make_system(system_phase=system_phase)
     eps, r, L, thetas, gdl_mass_transfer_coefficient = _base_inputs()
 
     solution = ph_model.solve_current(
@@ -59,24 +66,16 @@ def test_solve_current_runs_in_solid_mode_with_gdl_flux_key():
     )
 
     assert 'gdl_flux' in solution
-    assert torch.isfinite(solution['current_density']).all()
+    assert 'current_density' in solution
+    assert 'pH' in solution
+    assert torch.isfinite(solution['current_density']).all().item()
+    assert torch.isfinite(solution['pH']).all().item()
+
+    if system_phase == 'liquid':
+        assert torch.allclose(solution['gdl_flux'], torch.zeros_like(solution['gdl_flux']))
+    else:
+        assert torch.isfinite(solution['gdl_flux']).all().item()
 
 
-def test_solve_current_runs_in_liquid_mode_with_zero_gdl_flux():
-    ph_model = _make_system(system_phase='liquid')
-    eps, r, L, thetas, gdl_mass_transfer_coefficient = _base_inputs()
-
-    solution = ph_model.solve_current(
-        i_target=233,
-        eps=eps,
-        r=r,
-        L=L,
-        thetas=thetas,
-        gdl_mass_transfer_coeff=gdl_mass_transfer_coefficient,
-        grid_size=1000,
-        voltage_bounds=(-1.25, 0),
-    )
-
-    assert 'gdl_flux' in solution # Make sure we still have the gdl_flux key in liquid mode
-    assert torch.allclose(solution['gdl_flux'], torch.zeros_like(solution['gdl_flux'])) # Make sure we actually have zero gdl flux in liquid mode
-    assert torch.isfinite(solution['current_density']).all() # Make sure we still get a valid current density solution in liquid mode
+if __name__ == '__main__':
+    raise SystemExit(pytest.main([__file__]))

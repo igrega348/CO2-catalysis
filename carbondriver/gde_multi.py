@@ -300,11 +300,6 @@ class System(torch.nn.Module):
         DCO2 = self.bruggeman(self.diffusion_coefficients['CO2'], eps)
         E_CO = self.electrode_reaction_potentials['E_0_CO']
         co2_equilibrium = self.co2_equilibrium
-        c_CO2_bulk = co2_equilibrium['CO2']
-        if self.system_phase == 'liquid':
-            co2_transfer_coeff = self.flow_channel_characteristics['K_L_CO2']
-        else:
-            co2_transfer_coeff = gdl_mass_transfer_coeff
             
         OH_neg = co2_equilibrium['OH']
         HCO3_neg = co2_equilibrium['HCO3']
@@ -320,158 +315,175 @@ class System(torch.nn.Module):
         k0_C2H4 = A/(6*F) * self.electrode_reaction_kinetics['i_0_C2H4'] * thetas['C2H4']/self.chemical_reaction_rates['c_ref'] * torch.exp(
             -overpotential_C2H4 * self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_C2H4'])
         k0 = k0_CO + k0_C2H4
-        eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/co2_transfer_coeff)
+        
+        # HER Rate (used in both branches)
+        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b'])
+
         if self.system_phase == 'liquid':
-            c00 = c_CO2_bulk*eff_0
+            # ============================================================
+            # LIQUID/BPM CASE: Neumann BC (flux source at BPM interface)
+            # ============================================================
+            t_H = 0.9  # H+ transference number through BPM
+            co2_transfer_coeff = self.flow_channel_characteristics['K_L_CO2']
+            
+            M_val = M(k0)
+            eff_rxn = torch.tanh(M_val) / M_val
+            J_gen = t_H * r_H2 * L
+            denominator = k0 * L * eff_rxn + co2_transfer_coeff
+            c03 = J_gen / torch.clamp(denominator, min=1e-20)
+            
+            # One correction iteration for CO2R contribution to J_gen
+            k0_electron = 2*k0_CO + 6*k0_C2H4
+            J_gen_corrected = J_gen + t_H * k0_electron * c03 * L
+            c03 = J_gen_corrected / torch.clamp(denominator, min=1e-20)
+
+            # OH- and pH Calculation (linear balance)
+            r_OH_gen = r_H2 + k0_electron * c03
+            c12 = OH_neg + (
+                self.flow_channel_characteristics['K_L_OH'] * OH_neg + L * r_OH_gen
+            ) / (self.flow_channel_characteristics['K_L_OH'] + 2 * self.chemical_reaction_rates['k1f'] * L * eps * c03)
+
+            # Carbonate and HCO3 Balance (linear)
+            A_1_1 = (
+                2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + 
+                self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + 
+                self.flow_channel_characteristics['K_L_OH']*OH_neg + 
+                L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
+            ) / (2*self.flow_channel_characteristics['K_L_CO3'])
+            B_2_1 = (L * 2 * k0 * c03) / (2 * self.flow_channel_characteristics['K_L_CO3'])
+            c21 = torch.maximum(A_1_1 + B_2_1, torch.zeros_like(A_1_1))
+
         else:
+            # ============================================================
+            # GAS CASE: 3-step coupling with salting-out
+            # ============================================================
+            # Step 1: Initial guess (no equilibrium)
+            eff_0 = 1/(M(k0)/torch.tanh(M(k0)) + k0*L/gdl_mass_transfer_coeff)
             c00 = Hnr*self.p0*eff_0
 
-        # estimating OH- concentration
-        r_H2 = A*self.electrode_reaction_kinetics['i_0_H2b'] * thetas['H2b']/F * torch.exp(-phi_ext*self.butler_volmer_factor*self.electrode_reaction_kinetics['alpha_H2b']) # phi_ext is with respect to SHE
-        r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c00
-        c10 = OH_neg+(
-            self.flow_channel_characteristics['K_L_OH']*OH_neg - 
-            1/(
-                1/(L*(r_H2+r_H2_CO2)) +
-                1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
+            # Step 2: First OH- estimate
+            r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c00
+            c10 = OH_neg+(
+                self.flow_channel_characteristics['K_L_OH']*OH_neg - 
+                1/(
+                    1/(L*(r_H2+r_H2_CO2)) +
+                    1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
+                )
+                + L*(r_H2+r_H2_CO2)
+            ) / (
+                self.flow_channel_characteristics['K_L_OH'] + 2*eps*L*self.chemical_reaction_rates['k1f']*c00
             )
-            + L*(r_H2+r_H2_CO2)
-        ) / (
-            self.flow_channel_characteristics['K_L_OH'] + 2*eps*L*self.chemical_reaction_rates['k1f']*c00
-        )
 
-        # update CO2 concentration 
-        k1 = k0 + eps*self.chemical_reaction_rates['k1f']*c10
-        eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/co2_transfer_coeff)
-        if self.system_phase == 'liquid':
-            c01 = eff_1*c_CO2_bulk
-        else:
+            # update CO2 concentration 
+            k1 = k0 + eps*self.chemical_reaction_rates['k1f']*c10
+            eff_1 = 1/(M(k1)/torch.tanh(M(k1)) + k1*L/gdl_mass_transfer_coeff)
             c01 = eff_1*self.p0*Hnr
-        # update OH- concentration
-        r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c01
-        c11 = OH_neg + (
-            self.flow_channel_characteristics['K_L_OH']*OH_neg - 1/(
-                1/(L*(r_H2+r_H2_CO2)) + 1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
-            ) + L*(r_H2+r_H2_CO2) 
-            ) / (
-            self.flow_channel_characteristics['K_L_OH']+2*self.chemical_reaction_rates['k1f']*L*eps*c01
-        )
-        # solve for CO3--
-        A_1 = (
-            2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c11
-        ) / (2*self.flow_channel_characteristics['K_L_CO3'])
-        B_2 = L*2*k0*c01 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c11*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
-        C = self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
-        c20 = A_1+torch.log(
-            1+(B_2*C * torch.exp(-A_1*C)) / (1+torch.log(torch.sqrt(1+B_2*C*torch.exp(-A_1*C))))
-            ) / C
-        # salting out corrected CO2 concentration
-        if self.system_phase == 'liquid':
-            c02 = eff_1*c_CO2_bulk
-        else:
-            c02 = eff_1*self.p0*Hnr_c(c11,c20)
-        r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c02
-        # corrected OH- concentration
-        c12 = OH_neg + (
-            self.flow_channel_characteristics['K_L_OH']*OH_neg - 1/(
-                1/(L*(r_H2+r_H2_CO2)) + 1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
-            ) + L*(r_H2+r_H2_CO2)
-            ) / (
-            self.flow_channel_characteristics['K_L_OH']+2*self.chemical_reaction_rates['k1f']*L*eps*c02
-        )
-
-        k2 = k0 + eps*self.chemical_reaction_rates['k1f']*c12
-        eff_2 = 1/(
-            torch.sqrt(
-                k2*L**2/DCO2
-            ) / torch.tanh(torch.sqrt(
-                k2*L**2/DCO2
-            )) + k2*L/co2_transfer_coeff
-        )
-        A_1_1 = (
-            2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
-        ) / (2*self.flow_channel_characteristics['K_L_CO3'])
-        # formula for this B2 is different than for the previous B2
-        if self.system_phase == 'liquid':
-            B_2_1 = L*2*k0*eff_2*c_CO2_bulk / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
-        else:
-            B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
-        c21 = A_1_1+torch.log(
-            1+(
-                B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']) * torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))
+            
+            # update OH- concentration
+            r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c01
+            c11 = OH_neg + (
+                self.flow_channel_characteristics['K_L_OH']*OH_neg - 1/(
+                    1/(L*(r_H2+r_H2_CO2)) + 1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
+                ) + L*(r_H2+r_H2_CO2) 
                 ) / (
-                    1+torch.log(torch.sqrt(1+B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K'])*torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))))
-                    )
-            ) / (
-            self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
-        )
-        c21 = torch.maximum(c21, torch.zeros_like(c21))
-        if self.system_phase == 'liquid':
-            c03 = c_CO2_bulk*eff_2
-        else:
+                self.flow_channel_characteristics['K_L_OH']+2*self.chemical_reaction_rates['k1f']*L*eps*c01
+            )
+            
+            # Step 3: Solve for CO3-- (log approximation)
+            A_1 = (
+                2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c11
+            ) / (2*self.flow_channel_characteristics['K_L_CO3'])
+            B_2 = L*2*k0*c01 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c11*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
+            C = self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
+            c20 = A_1+torch.log(
+                1+(B_2*C * torch.exp(-A_1*C)) / (1+torch.log(torch.sqrt(1+B_2*C*torch.exp(-A_1*C))))
+                ) / C
+            
+            # salting out corrected CO2 concentration
+            c02 = eff_1*self.p0*Hnr_c(c11,c20)
+            r_H2_CO2 = (2*k0_CO + 6*k0_C2H4)*c02
+            
+            # corrected OH- concentration
+            c12 = OH_neg + (
+                self.flow_channel_characteristics['K_L_OH']*OH_neg - 1/(
+                    1/(L*(r_H2+r_H2_CO2)) + 1/(self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg)
+                ) + L*(r_H2+r_H2_CO2)
+                ) / (
+                self.flow_channel_characteristics['K_L_OH']+2*self.chemical_reaction_rates['k1f']*L*eps*c02
+            )
+
+            k2 = k0 + eps*self.chemical_reaction_rates['k1f']*c12
+            eff_2 = 1/(
+                torch.sqrt(k2*L**2/DCO2) / torch.tanh(torch.sqrt(k2*L**2/DCO2)) + k2*L/gdl_mass_transfer_coeff
+            )
+            
+            # Final CO3-- calculation
+            A_1_1 = (
+                2*self.flow_channel_characteristics['K_L_CO3']*CO3_2neg + self.flow_channel_characteristics['K_L_HCO3']*HCO3_neg + self.flow_channel_characteristics['K_L_OH']*OH_neg + L*r_H2 - self.flow_channel_characteristics['K_L_OH']*c12
+            ) / (2*self.flow_channel_characteristics['K_L_CO3'])
+            B_2_1 = L*2*k0*eff_2*Hnr*self.p0 / (2*self.flow_channel_characteristics['K_L_CO3']) * torch.exp(-c12*(self.salting_out_exponents['h_OH']+self.salting_out_exponents['h_K']))
+            c21 = A_1_1+torch.log(
+                1+(
+                    B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']) * torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))
+                    ) / (
+                        1+torch.log(torch.sqrt(1+B_2_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K'])*torch.exp(-A_1_1*(self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']))))
+                        )
+                ) / (
+                self.salting_out_exponents['h_CO3']+2*self.salting_out_exponents['h_K']
+            )
+            c21 = torch.maximum(c21, torch.zeros_like(c21))
             c03 = self.p0*Hnr_c(c12, c21)*eff_2
+
+        # ============================================================
+        # FINAL OUTPUT COMPILATION (Common to both)
+        # ============================================================
         potential_vs_rhe = phi_ext - R*T/F*torch.log(c12/OH_neg)
         co_current_density = L*c03*k0_CO*2*F/10 # mA/cm^2
         c2h4_current_density = L*c03*k0_C2H4*6*F/10 # mA/cm^2
-        co2 = c03
-        co3 = c21
-        pH = torch.log10(c12/1000/self.initial_carbonate_equilibria['Kw'])
         current_density = co_current_density + c2h4_current_density + (F*L*r_H2)/10 # mA/cm^2
+        
+        if self.system_phase == 'liquid':
+            pKw = -torch.log10(torch.as_tensor(self.initial_carbonate_equilibria['Kw'], dtype=c12.dtype, device=c12.device))
+            pH = pKw + torch.log10(torch.clamp(c12 / 1000, min=1e-14))
+        else:
+            pH = torch.log10(c12/1000/self.initial_carbonate_equilibria['Kw'])
+
         fe_co = co_current_density / current_density
         fe_c2h4 = c2h4_current_density / current_density
-        parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
-        electrode = L*k0*c03
+        
         if self.system_phase == 'liquid':
+            parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
+            electrode = L*k0*c03
             gdl_flux = torch.zeros_like(c03)
             hco3 = torch.minimum(
-                HCO3_neg+c_CO2_bulk,
-                co3*10**(3-pH)/self.initial_carbonate_equilibria['K1']
+                torch.as_tensor(HCO3_neg, dtype=c21.dtype),
+                c21*10**(3-pH)/self.initial_carbonate_equilibria['K1']
             )
             solubility = torch.ones_like(c03)
         else:
+            parasitic = c03*c12*eps*L*self.chemical_reaction_rates['k1f']
+            electrode = L*k0*c03
             gdl_flux = gdl_mass_transfer_coeff*(
-                Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(
-                    k2*L**2/DCO2
-                ) / torch.tanh(
-                    torch.sqrt(k2*L**2/DCO2)
-                )
+                Hnr_c(c12,c21)*self.p0 - c03*torch.sqrt(k2*L**2/DCO2) / torch.tanh(torch.sqrt(k2*L**2/DCO2))
             )
             hco3 = torch.minimum(
                 HCO3_neg+Hnr_c(c12,c21)*self.p0,
-                co3*10**(3-pH)/self.initial_carbonate_equilibria['K1']
+                c21*10**(3-pH)/self.initial_carbonate_equilibria['K1']
             )
             solubility = Hnr_c(c12,c21)/Hnr
-        # deleted voltage and energy efficiencies for now, just to avoid possible bugs
+
         return {
             'phi_ext': phi_ext,
             'k0': k0,
-            'eff_0': eff_0,
-            'c00': c00,
             'r_H2': r_H2,
-            'r_H2_CO2': r_H2_CO2, # H2 consumption rate due to CO2 reduction / OH- generation rate
-            'c10': c10,
-            'k1': k1,
-            'eff_1': eff_1,
-            'c01': c01,
-            'c11': c11,
-            'A_1': A_1,
-            'B_2': B_2,
-            'c20': c20,
-            'c02': c02,
-            'c12': c12,
-            'k2': k2,
-            'eff_2': eff_2,
-            'c03': c03,
-            'c21': c21,
-            'A_1_1': A_1_1,
-            'B_2_1': B_2_1,
             'potential_vs_rhe': potential_vs_rhe,
             'h2_current_density': F*L*r_H2/10,
             'co_current_density': co_current_density,
             'c2h4_current_density': c2h4_current_density,
             'current_density': current_density,
-            'co2': co2,
-            'co3': co3,
+            'co2': c03,
+            'co3': c21,
+            'oh': c12,
             'pH': pH,
             'fe_co': fe_co,
             'fe_c2h4': fe_c2h4,
