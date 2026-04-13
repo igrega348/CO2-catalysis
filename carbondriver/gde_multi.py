@@ -325,17 +325,21 @@ class System(torch.nn.Module):
             # ============================================================
             t_H = 0.9  # H+ transference number through BPM
             co2_transfer_coeff = self.flow_channel_characteristics['K_L_CO2']
-            
-            M_val = M(k0)
-            eff_rxn = torch.tanh(M_val) / M_val
-            J_gen = t_H * r_H2 * L
-            denominator = k0 * L * eff_rxn + co2_transfer_coeff
-            c03 = J_gen / torch.clamp(denominator, min=1e-20)
+            M_val = torch.clamp(M(k0), min=1e-6)
+            Sh = co2_transfer_coeff * L / DCO2
+            k0_electron = 2*k0_CO + 6*k0_C2H4
+                # Exact effectiveness factor (average / boundary concentration)
+            eta_c = (
+                (Sh * (torch.cosh(M_val) - 1.0) / M_val**2 + torch.sinh(M_val) / M_val) /
+                (Sh * torch.cosh(M_val) + M_val * torch.sinh(M_val))
+            )
+                # Exact self-consistent solve (linear in c03, no iteration)
+            J_her = t_H * r_H2 * L
+            denominator = k0 * L + co2_transfer_coeff / eta_c - t_H * k0_electron * L
+            c03 = J_her / torch.clamp(denominator, min=1e-20)
             
             # One correction iteration for CO2R contribution to J_gen
             k0_electron = 2*k0_CO + 6*k0_C2H4
-            J_gen_corrected = J_gen + t_H * k0_electron * c03 * L
-            c03 = J_gen_corrected / torch.clamp(denominator, min=1e-20)
 
             # OH- and pH Calculation (linear balance)
             r_OH_gen = r_H2 + k0_electron * c03
