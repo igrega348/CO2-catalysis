@@ -5,7 +5,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import json
+import os
 
+Ag_DENSITY = 10490  # kg/m^3
+Cu_DENSITY = 8935  # kg/m^3
 
 # Load results from folder
 def load_results_from_folder(
@@ -63,9 +66,7 @@ def load_gas_data(file: Optional[Path] = None) -> pd.DataFrame:
     df["FE (CO)"] = df["FE (CO)"] / 100
     df["FE (Eth)"] = df["FE (Eth)"] / 100
 
-    dens_Ag = 10490  # kg/m^3
-    dens_Cu = 8935  # kg/m^3
-    dens_avg = (1 - df["AgCu Ratio"]) * dens_Cu + df["AgCu Ratio"] * dens_Ag
+    dens_avg = (1 - df["AgCu Ratio"]) *  Cu_DENSITY + df["AgCu Ratio"] * Ag_DENSITY
     mass = df["Catalyst mass loading"] * 1e-6  # kg
     area = 1.85**2  # cm^2
     A = area * 1e-4  # m^2
@@ -74,16 +75,75 @@ def load_gas_data(file: Optional[Path] = None) -> pd.DataFrame:
 
     # reshuffle triplets
     df["triplet"] = np.arange(len(df)) // 3
-    #     gen = np.random.default_rng(1)
-    gen = np.random.default_rng(2)
-    order = gen.permutation(30)
-    new_df = pd.DataFrame()
-    for i in order:
-        new_df = pd.concat([new_df, df[df["triplet"] == i]])
-    new_df.reset_index(drop=True, inplace=True)
-    # df = new_df
-    # normalize
+ 
     return df
+
+def load_bicarb_data(filepath: Optional[Path] = None) -> pd.DataFrame:
+    """
+    Reads the Bicarb CSV and melts the multiple result columns into new entries.
+    """
+
+    if filepath is None:
+        filepath = Path("./Bicarb_characterization_data.xlsx")
+
+    df = pd.read_excel(filepath, header=1, index_col=0).iloc[3:,:]
+
+    df = df.rename(columns={df.columns[0]:"Notes"})
+
+    df["Notes"] = df["Notes"].fillna("")
+
+    df = separate_repeats(df)
+
+    df["FE_CO"] = df["FE_CO"] / 100
+    df["CO2 utilization"] = df["CO2 utilization"] / 100
+
+    mass = df["Ag weight"] * 1e-6  # kg
+    area = 1.85**2  # cm^2
+    A = area * 1e-4  # m^2
+    thickness = (mass / Ag_DENSITY) / A  # m
+    df.insert(1, column="Zero_eps_thickness", value=thickness)
+
+    return df
+    
+    
+def separate_repeats(df):
+    
+    df.columns = [c.strip() for c in df.columns]
+
+    result_metrics = ['Voltage', 'FE_CO', 'CO2 utilization']
+
+    # Find all columns that ARE NOT the repeating result metrics
+    param_cols = [c for c in df.columns if not any(m in c for m in result_metrics)]
+
+    # 3. Handle the "Multi-Result" pivot
+    melted_frames = []
+
+    # Pandas appends .1 and .2 to duplicate column names
+    suffixes = ['', '.1', '.2']
+    for i, suffix in enumerate(suffixes):
+        v_col = f'Voltage{suffix}'
+        f_col = f'FE_CO{suffix}'
+        c_col = f'CO2 utilization{suffix}'
+        # Check if this set exists
+        if v_col in df.columns:
+            cols_to_extract = param_cols + [v_col, f_col, c_col]
+            subset = df[cols_to_extract].copy()
+            # Rename to standard names (removing suffixes)
+            subset = subset.rename(columns={
+                v_col: 'Voltage',
+                f_col: 'FE_CO',
+                c_col: 'CO2 utilization' # We'll use underscore for the final DF
+            })
+            melted_frames.append(subset)
+    # Combine all result sets
+    final_df = pd.concat(melted_frames, ignore_index=True)
+
+    # Drop rows where ALL result values are NaN
+    final_df = final_df.dropna(subset=result_metrics, how='all')
+
+    final_df["triplet"] = final_df.groupby(param_cols).ngroup()
+    
+    return final_df
 
 
 def feature_stats(
