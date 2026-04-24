@@ -88,9 +88,7 @@ def load_bicarb_data(filepath: Optional[Path] = None) -> pd.DataFrame:
 
     df = pd.read_excel(filepath, header=1, index_col=0).iloc[3:,:]
 
-    df = df.rename(columns={df.columns[0]:"Notes"})
-
-    df["Notes"] = df["Notes"].fillna("")
+    df = df.drop(columns=df.columns[0])
 
     df = separate_repeats(df)
 

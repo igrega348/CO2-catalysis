@@ -1,0 +1,11 @@
+run_name: bicarb_test_results
+dataset: bicarb
+num_runs: 1
+models: ["MLP", "GP"]
+property_name: 'FE_CO'
+EI_reference: "max"
+num_iter: 101
+normalize_inputs: True
+normalize_outputs: False
+torch_seed: 0
+use_existing_results: False

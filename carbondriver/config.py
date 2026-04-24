@@ -5,4 +5,6 @@ default_config = {
     "normalize_inputs": True,
     "normalize_outputs": False,
     "EI_reference": "max",
+    "dataset": "gas",
+    "property_name": "FE (Eth)",
 }
