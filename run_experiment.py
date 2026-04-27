@@ -9,7 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from carbondriver import GDEOptimizer
-from carbondriver.loaders import load_gas_data
+from carbondriver.loaders import load_gas_data, load_bicarb_data
 from typing import Tuple, Optional, Literal
 import torch
 import yaml
@@ -32,7 +32,7 @@ def choose_base_inds_numpy(y: np.ndarray, num_choose: int, how: Literal['max','m
     rng = np.random.default_rng(seed)
     return rng.choice(ind, size=num_choose, replace=False, p=p)
 
-def run_active_learning_experiment(model_name: str, run_idx: int):
+def run_active_learning_experiment(model_name: str, run_idx: int, config: dict):
     """Run a single active learning experiment for the given model."""
     
     print(f"  [Step 1/3] Preparing data for {model_name} run {run_idx}...")
@@ -47,10 +47,12 @@ def run_active_learning_experiment(model_name: str, run_idx: int):
     gde = GDEOptimizer(
         model_name=model_name,
         aquisition="EI",
-        quantity="FE (Eth)",
+        quantity=config["property_name"],
         maximize=True,
         output_dir=str(run_dir),
         config=config,
+        input_labels=config["input_labels"],
+        output_labels=config["output_labels"],
     )
     
     # Choose initial triplets
@@ -210,8 +212,26 @@ if __name__ == '__main__':
 
     # Load data once
     print("[2/6] Loading experimental data...")
-    df = load_gas_data("paper/Characterization_data.xlsx")
-    print(f"  ✓ Loaded {len(df)} data points")
+    dataset = config.get("dataset", "gas")
+    if dataset == "bicarb":
+        df = load_bicarb_data()
+        output_labels = ["FE_CO", "CO2 utilization"]
+    elif dataset == "gas":
+        df = load_gas_data()
+        output_labels = ["FE (Eth)", "FE (CO)"]
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+    
+    print(f"  ✓ Loaded {len(df)} data points from {dataset} dataset")
+    
+    # Determine input labels from non-constant columns
+    exclude_cols = {'triplet'} | set(output_labels)
+    input_labels = [col for col in df.columns 
+                    if col not in exclude_cols and df[col].nunique() > 1]
+    print(f"  Input features: {input_labels}")
+    
+    config["input_labels"] = input_labels
+    config["output_labels"] = output_labels
     
     if not config["use_existing_results"]:
         
@@ -231,7 +251,7 @@ if __name__ == '__main__':
                 print(f"\n{'='*70}")
                 print(f"RUN {run_num}/{total_runs}: {model.upper()} (Seed {run_idx})")
                 print(f"{'='*70}")
-                run_active_learning_experiment(model, run_idx)
+                run_active_learning_experiment(model, run_idx, config)
                 print(f"✓ Completed {model} run {run_idx+1}/{config['num_runs']}")
                 
         print("\n" + "="*70)
