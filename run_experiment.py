@@ -38,6 +38,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int, config: dict):
     print(f"  [Step 1/3] Preparing data for {model_name} run {run_idx}...")
     # Reset df for this run
     df_triplet_means = df.groupby('triplet').mean()
+    best_id = int(df_triplet_means[config["property_name"]].idxmax())
     
     run_dir = OUTPUT_BASE / f'{model_name}_run_{run_idx:03d}'
     run_dir.mkdir(exist_ok=True, parents=True)
@@ -67,6 +68,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int, config: dict):
     bests = df_triplet_means.loc[chosen_triplets_ids][config["property_name"]].cummax().tolist()
     print(f"    Starting triplets: {chosen_triplets_ids}")
     print(f"    Starting best FE values: {[f'{b:.4f}' for b in bests]}")
+    print(f"    Objective: {df_triplet_means.loc[best_id, config['property_name']]:.4f} at triplet {best_id}")
 
     # Track results
     expected_improvements = [None] * len(chosen_triplets_ids)
@@ -81,7 +83,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int, config: dict):
     iteration = 0
     
     print(f"\n  Starting active learning loop with {len(withheld_df)} candidates...")
-    while len(withheld_df) > 0:
+    while len(withheld_df) > 0 and best_id not in chosen_triplets_ids:
         print(f"  Run {run_idx}, Iteration {iteration}: Evaluating acquisition function...")
         # Evaluate acquisition function
         best_ei, best_row_idx, metrics = gde.step_within_data(train_df, withheld_df, return_metrics=True)
@@ -100,11 +102,7 @@ def run_active_learning_experiment(model_name: str, run_idx: int, config: dict):
         print(f"    ✓ Selected triplet {int(best_triplet.name)}, Best FE: {current_best:.4f}, EI: {best_ei:.6f}, Remaining candidates: {len(withheld_df)}")
         
         iteration += 1
-
-        if best_triplet.name == df_triplet_means[config["property_name"]].idxmax():
-            print(f"    ✓ Found global optimum! Stopping early.")
-            break
-
+        
     print(f"  ✓ Run {run_idx} completed in {iteration} iterations.\n")
     # Save results
     results_df = pd.DataFrame({
@@ -229,6 +227,11 @@ if __name__ == '__main__':
     input_labels = [col for col in df.columns 
                     if col not in exclude_cols and df[col].nunique() > 1]
     print(f"  Input features: {input_labels}")
+
+    df = df[df.loc[:,output_labels].notna().all(axis=1)]
+
+    df_triplet_means = df.groupby('triplet').mean()
+    best_id = int(df_triplet_means[config["property_name"]].idxmax())
     
     config["input_labels"] = input_labels
     config["output_labels"] = output_labels
@@ -398,7 +401,6 @@ if __name__ == '__main__':
         steps_to_finish = []
         final_nlls = []
         final_losses = []
-        run_count = 0
 
         df_model = all_df.loc[all_df["model"]==model_name]
         
@@ -415,23 +417,25 @@ if __name__ == '__main__':
                     # missing column or all-NaN -> skip
                     pass
             
-            # Find step where cummax FE exceeds 0.245
-            filtered = chosen_df[chosen_df['cummax FE'] > 0.245]
+            # Find step where cummax FE becomes max
+            filtered = chosen_df[chosen_df['cummax FE'] >= df_triplet_means.loc[best_id, config["property_name"]]]
             if not filtered.empty:
                 # First step where threshold was crossed
                 step_to_max = filtered['step'].iloc[0]
                 # Record steps to finish
                 steps_to_finish.append(step_to_max)
+            else:
+                print(f"    Run {run} did not reach the target FE threshold.")
                 
         if steps_to_finish:
             sf = np.array(steps_to_finish)
             sf[sf < 0] = 0
             mean_steps = np.mean(sf)
             std_steps = np.std(sf)
-            accel_factor = 13 / mean_steps if mean_steps > 0 else np.inf
+            accel_factor = ((len(df_triplet_means)-3+1)/2) / mean_steps if mean_steps > 0 else np.inf
             
-            print(f"  Runs analyzed: {run_count}")
-            print(f"  Mean steps to FE=0.245: {mean_steps:.2f} ± {std_steps:.2f}")
+            print(f"  Runs analyzed: {len(df_model['dname'].unique())}")
+            print(f"  Mean steps to max FE: {mean_steps:.2f} ± {std_steps:.2f}")
             stats[model_name] = {"Mean Steps": mean_steps, "Std Steps": std_steps, "Acceleration Factor": accel_factor} 
             if final_losses:
                 print(f"  Final MSE (loss): {np.mean(final_losses):.4f} ± {np.std(final_losses):.4f}")
