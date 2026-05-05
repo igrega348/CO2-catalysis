@@ -9,7 +9,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from carbondriver import GDEOptimizer
-from carbondriver.loaders import load_gas_data, load_bicarb_data
+from carbondriver.loaders import (
+    load_gas_data,
+    load_bicarb_data,
+    default_input_labels,
+    default_output_labels,
+)
 from typing import Tuple, Optional, Literal
 import torch
 import yaml
@@ -215,21 +220,22 @@ if __name__ == '__main__':
     dataset = config.get("dataset", "gas")
     if dataset == "bicarb":
         df = load_bicarb_data()
-        output_labels = ["FE_CO", "CO2 utilization"]
     elif dataset == "gas":
         df = load_gas_data()
-        output_labels = ["FE (Eth)", "FE (CO)"]
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
     
     print(f"  ✓ Loaded {len(df)} data points from {dataset} dataset")
     
-    # Determine input labels from non-constant columns
-    exclude_cols = {'triplet'} | set(output_labels)
-    input_labels = [col for col in df.columns 
-                    if col not in exclude_cols and df[col].nunique() > 1]
+    output_labels = config.get("output_labels") or default_output_labels(dataset)
+    input_labels = config.get("input_labels") or default_input_labels(dataset)
+
+    missing_cols = [c for c in input_labels + output_labels if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns for {dataset}: {missing_cols}")
+
     print(f"  Input features: {input_labels}")
-    
+
     config["input_labels"] = input_labels
     config["output_labels"] = output_labels
     
