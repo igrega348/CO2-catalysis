@@ -130,7 +130,7 @@ def load_gas_data(file: Optional[Path] = None) -> pd.DataFrame:
     # reshuffle triplets
     df["triplet"] = np.arange(len(df)) // 3
  
-    return df
+    return df.astype(float)
 
 def load_bicarb_data(filepath: Optional[Path] = None) -> pd.DataFrame:
     """
@@ -142,10 +142,10 @@ def load_bicarb_data(filepath: Optional[Path] = None) -> pd.DataFrame:
 
     df = pd.read_excel(filepath, header=1, index_col=0).iloc[3:,:]
 
-    df = df.drop(columns=df.columns[0])
-
     df = separate_repeats(df)
     df = df.apply(pd.to_numeric, errors='coerce') #Excel Files can have some weird formatting, so coerce to numeric and drop non-convertible rows later
+
+    df = df.drop(columns=[df.columns[0], "Voltage"])
 
     df["FE_CO"] = df["FE_CO"] / 100
     df["CO2 utilization"] = df["CO2 utilization"] / 100
@@ -167,8 +167,7 @@ def load_bicarb_data(filepath: Optional[Path] = None) -> pd.DataFrame:
     remaining_cols = [c for c in df.columns if c not in ordered_cols]
     df = df[ordered_cols + remaining_cols]
 
-    return df
-    
+    return df.astype(float)
     
 def separate_repeats(df):
     
